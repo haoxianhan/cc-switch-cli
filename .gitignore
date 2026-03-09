@@ -22,3 +22,6 @@ vitest-report.json
 *.bak
 skill.md
 scripts/
+
+.agent/
+.agents/
