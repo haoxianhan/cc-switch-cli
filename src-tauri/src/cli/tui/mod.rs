@@ -1047,6 +1047,57 @@ fn scan_unmanaged_skills(app: &mut App) -> Result<(), AppError> {
     scan_unmanaged_skills_with(app, SkillService::scan_unmanaged)
 }
 
+fn open_skills_import_picker_with<F>(app: &mut App, scan: F) -> Result<(), AppError>
+where
+    F: FnOnce() -> Result<Vec<crate::services::skill::UnmanagedSkill>, AppError>,
+{
+    let skills = scan()?;
+    app.skills_unmanaged_results = skills.clone();
+    app.skills_unmanaged_selected.clear();
+    app.skills_unmanaged_idx = 0;
+
+    if skills.is_empty() {
+        app.overlay = Overlay::None;
+        app.push_toast(texts::skills_no_unmanaged_found(), ToastKind::Info);
+        return Ok(());
+    }
+
+    let selected = skills
+        .iter()
+        .map(|skill| skill.directory.clone())
+        .collect::<HashSet<_>>();
+    app.overlay = Overlay::SkillsImportPicker {
+        skills,
+        selected_idx: 0,
+        selected,
+    };
+    Ok(())
+}
+
+fn open_skills_import_picker(app: &mut App) -> Result<(), AppError> {
+    open_skills_import_picker_with(app, SkillService::scan_unmanaged)
+}
+
+fn finish_skills_import_with<FImport, FLoad>(
+    app: &mut App,
+    data: &mut UiData,
+    import: FImport,
+    load_data: FLoad,
+) -> Result<(), AppError>
+where
+    FImport: FnOnce() -> Result<Vec<crate::app_config::InstalledSkill>, AppError>,
+    FLoad: FnOnce(&AppType) -> Result<UiData, AppError>,
+{
+    let imported = import()?;
+    app.overlay = Overlay::None;
+    *data = load_data(&app.app_type)?;
+    app.push_toast(
+        texts::tui_toast_unmanaged_imported(imported.len()),
+        ToastKind::Info,
+    );
+    Ok(())
+}
+
 fn import_mcp_for_current_app_with<FImport, FLoad>(
     app: &mut App,
     data: &mut UiData,
@@ -1207,6 +1258,12 @@ fn handle_action(
                 crate::cli::tui::route::Route::SkillDetail { directory: current }
                     if current.eq_ignore_ascii_case(&directory)
             ) {
+                if matches!(
+                    app.route_stack.last(),
+                    Some(crate::cli::tui::route::Route::Skills)
+                ) {
+                    app.route_stack.pop();
+                }
                 app.route = crate::cli::tui::route::Route::Skills;
             }
             Ok(())
@@ -1273,21 +1330,24 @@ fn handle_action(
             app.push_toast(texts::tui_toast_repo_toggled(enabled), ToastKind::Success);
             Ok(())
         }
+        Action::SkillsOpenImport => {
+            open_skills_import_picker(app)?;
+            Ok(())
+        }
         Action::SkillsScanUnmanaged => {
             scan_unmanaged_skills(app)?;
             Ok(())
         }
         Action::SkillsImportFromApps { directories } => {
-            let imported = SkillService::import_from_apps(directories)?;
-            *data = UiData::load(&app.app_type)?;
-            // Refresh unmanaged list after import.
+            finish_skills_import_with(
+                app,
+                data,
+                || SkillService::import_from_apps(directories),
+                UiData::load,
+            )?;
             app.skills_unmanaged_results = SkillService::scan_unmanaged()?;
             app.skills_unmanaged_selected.clear();
             app.skills_unmanaged_idx = 0;
-            app.push_toast(
-                texts::tui_toast_unmanaged_imported(imported.len()),
-                ToastKind::Success,
-            );
             Ok(())
         }
         Action::EditorDiscard => {
@@ -3083,6 +3143,50 @@ mod tests {
         let toast = app.toast.as_ref().expect("skills scan should show toast");
         assert_eq!(toast.kind, ToastKind::Info);
         assert_eq!(toast.message, texts::tui_toast_unmanaged_scanned(0));
+    }
+
+    #[test]
+    fn opening_skills_import_picker_selects_all_by_default() {
+        let mut app = App::new(Some(AppType::Claude));
+
+        super::open_skills_import_picker_with(&mut app, || {
+            Ok(vec![crate::services::skill::UnmanagedSkill {
+                directory: "hello-skill".to_string(),
+                name: "Hello Skill".to_string(),
+                description: Some("A local skill".to_string()),
+                found_in: vec!["claude".to_string()],
+            }])
+        })
+        .expect("import picker should open");
+
+        assert!(matches!(
+            &app.overlay,
+            Overlay::SkillsImportPicker {
+                skills,
+                selected_idx: 0,
+                selected,
+            } if skills.len() == 1
+                && skills[0].directory == "hello-skill"
+                && selected.contains("hello-skill")
+        ));
+    }
+
+    #[test]
+    fn skills_import_from_apps_uses_info_toast_kind() {
+        let mut app = App::new(Some(AppType::OpenCode));
+        let mut data = UiData::default();
+
+        super::finish_skills_import_with(
+            &mut app,
+            &mut data,
+            || Ok(vec![]),
+            |_app_type| Ok(UiData::default()),
+        )
+        .expect("skills import should work");
+
+        let toast = app.toast.as_ref().expect("skills import should show toast");
+        assert_eq!(toast.kind, ToastKind::Info);
+        assert_eq!(toast.message, texts::tui_toast_unmanaged_imported(0));
     }
 
     #[test]

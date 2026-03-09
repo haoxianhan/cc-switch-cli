@@ -176,6 +176,11 @@ pub enum Overlay {
         selected: usize,
         apps: crate::app_config::SkillApps,
     },
+    SkillsImportPicker {
+        skills: Vec<crate::services::skill::UnmanagedSkill>,
+        selected_idx: usize,
+        selected: HashSet<String>,
+    },
     SkillsSyncMethodPicker {
         selected: usize,
     },
@@ -568,6 +573,7 @@ pub enum Action {
         name: String,
         enabled: bool,
     },
+    SkillsOpenImport,
     SkillsScanUnmanaged,
     SkillsImportFromApps {
         directories: Vec<String>,
@@ -1107,7 +1113,8 @@ impl App {
                 });
                 Action::None
             }
-            KeyCode::Char('i') => self.push_route_and_switch(Route::SkillsUnmanaged),
+            KeyCode::Char('i') => Action::SkillsOpenImport,
+            KeyCode::Char('f') => self.push_route_and_switch(Route::SkillsDiscover),
             _ => Action::None,
         }
     }
@@ -2448,6 +2455,53 @@ impl App {
                             apps: next,
                         }
                     }
+                }
+                _ => Action::None,
+            },
+            Overlay::SkillsImportPicker {
+                skills,
+                selected_idx,
+                selected,
+            } => match key.code {
+                KeyCode::Esc => {
+                    self.overlay = Overlay::None;
+                    Action::None
+                }
+                KeyCode::Up => {
+                    *selected_idx = selected_idx.saturating_sub(1);
+                    Action::None
+                }
+                KeyCode::Down => {
+                    if !skills.is_empty() {
+                        *selected_idx = (*selected_idx + 1).min(skills.len() - 1);
+                    }
+                    Action::None
+                }
+                KeyCode::Char('x') | KeyCode::Char(' ') => {
+                    let Some(skill) = skills.get(*selected_idx) else {
+                        return Action::None;
+                    };
+                    if selected.contains(&skill.directory) {
+                        selected.remove(&skill.directory);
+                    } else {
+                        selected.insert(skill.directory.clone());
+                    }
+                    Action::None
+                }
+                KeyCode::Char('r') => Action::SkillsOpenImport,
+                KeyCode::Char('i') | KeyCode::Enter => {
+                    if selected.is_empty() {
+                        self.push_toast(texts::tui_toast_no_unmanaged_selected(), ToastKind::Info);
+                        return Action::None;
+                    }
+
+                    let directories = skills
+                        .iter()
+                        .filter(|skill| selected.contains(&skill.directory))
+                        .map(|skill| skill.directory.clone())
+                        .collect();
+                    self.overlay = Overlay::None;
+                    Action::SkillsImportFromApps { directories }
                 }
                 _ => Action::None,
             },
@@ -3971,32 +4025,28 @@ mod tests {
     }
 
     #[test]
-    fn skills_f_does_nothing_when_discover_is_disabled() {
-        let mut app = App::new(Some(AppType::Claude));
-        app.route = Route::Skills;
-        app.focus = Focus::Content;
-
-        let action = app.on_key(key(KeyCode::Char('f')), &data());
-        assert!(
-            matches!(action, Action::None),
-            "Discover is disabled; f should do nothing on Skills page"
-        );
-        assert!(
-            matches!(&app.overlay, Overlay::None),
-            "Discover is disabled; overlay should stay closed"
-        );
-    }
-
-    #[test]
-    fn skills_i_opens_import_existing_page() {
+    fn skills_i_requests_import_picker() {
         let mut app = App::new(Some(AppType::Claude));
         app.route = Route::Skills;
         app.focus = Focus::Content;
 
         let action = app.on_key(key(KeyCode::Char('i')), &data());
         assert!(
-            matches!(action, Action::SwitchRoute(Route::SkillsUnmanaged)),
-            "i in Skills page should navigate to Import Existing"
+            matches!(action, Action::SkillsOpenImport),
+            "i in Skills page should open the import picker flow"
+        );
+    }
+
+    #[test]
+    fn skills_f_opens_discover_page() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Skills;
+        app.focus = Focus::Content;
+
+        let action = app.on_key(key(KeyCode::Char('f')), &data());
+        assert!(
+            matches!(action, Action::SwitchRoute(Route::SkillsDiscover)),
+            "f in Skills page should navigate to Discover"
         );
     }
 

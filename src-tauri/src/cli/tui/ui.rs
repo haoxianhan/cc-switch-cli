@@ -588,6 +588,28 @@ fn skill_display_name<'a>(name: &'a str, directory: &'a str) -> &'a str {
     }
 }
 
+fn enabled_skill_apps_text(apps: &crate::app_config::SkillApps) -> String {
+    let mut enabled = Vec::new();
+    if apps.claude {
+        enabled.push("Claude");
+    }
+    if apps.codex {
+        enabled.push("Codex");
+    }
+    if apps.gemini {
+        enabled.push("Gemini");
+    }
+    if apps.opencode {
+        enabled.push("OpenCode");
+    }
+
+    if enabled.is_empty() {
+        texts::none().to_string()
+    } else {
+        enabled.join(", ")
+    }
+}
+
 fn render_skills_installed(
     frame: &mut Frame<'_>,
     app: &App,
@@ -621,8 +643,9 @@ fn render_skills_installed(
                 ("Enter", texts::tui_key_details()),
                 ("x", texts::tui_key_toggle()),
                 ("m", texts::tui_key_apps()),
-                ("d", texts::tui_key_uninstall()),
+                ("f", texts::tui_key_discover()),
                 ("i", texts::tui_skills_action_import_existing()),
+                ("d", texts::tui_key_uninstall()),
             ],
         );
     }
@@ -797,6 +820,7 @@ fn render_skills_discover(
             &[
                 ("Enter", texts::tui_key_install()),
                 ("f", texts::tui_key_search()),
+                ("r", texts::tui_key_repos()),
             ],
         );
     }
@@ -1188,10 +1212,7 @@ fn render_skill_detail(
             Style::default().fg(theme.accent),
         ),
         Span::raw(": "),
-        Span::raw(format!(
-            "claude={}  codex={}  gemini={}  opencode={}",
-            skill.apps.claude, skill.apps.codex, skill.apps.gemini, skill.apps.opencode
-        )),
+        Span::raw(enabled_skill_apps_text(&skill.apps)),
     ]));
 
     if let (Some(owner), Some(name)) = (&skill.repo_owner, &skill.repo_name) {
@@ -2935,7 +2956,7 @@ fn render_mcp(
                 ("m", texts::tui_key_apps()),
                 ("a", texts::tui_key_add()),
                 ("e", texts::tui_key_edit()),
-                ("i", texts::tui_key_import()),
+                ("i", texts::tui_mcp_action_import_existing()),
                 ("d", texts::tui_key_delete()),
             ],
         );
@@ -4193,6 +4214,101 @@ fn render_overlay(frame: &mut Frame<'_>, app: &App, data: &UiData, theme: &super
             state.select(Some(*selected));
             frame.render_stateful_widget(list, body_area, &mut state);
         }
+        Overlay::SkillsImportPicker {
+            skills,
+            selected_idx,
+            selected,
+        } => {
+            let area = centered_rect_fixed(OVERLAY_FIXED_LG.0, OVERLAY_FIXED_LG.1, content_area);
+            frame.render_widget(Clear, area);
+
+            let outer = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Plain)
+                .border_style(overlay_border_style(theme, true))
+                .title(texts::tui_skills_import_title())
+                .style(if theme.no_color {
+                    Style::default()
+                } else {
+                    Style::default().bg(theme.surface)
+                });
+            frame.render_widget(outer.clone(), area);
+            let inner = outer.inner(area);
+
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(1),
+                    Constraint::Length(2),
+                    Constraint::Min(0),
+                ])
+                .split(inner);
+
+            render_key_bar_center(
+                frame,
+                chunks[0],
+                theme,
+                &[
+                    ("Space", texts::tui_key_select()),
+                    ("Enter", texts::tui_key_import()),
+                    ("r", texts::tui_key_refresh()),
+                    ("Esc", texts::tui_key_close()),
+                ],
+            );
+
+            frame.render_widget(
+                Paragraph::new(texts::tui_skills_import_description())
+                    .style(Style::default().fg(theme.dim))
+                    .wrap(Wrap { trim: false }),
+                chunks[1],
+            );
+
+            let body_area = inset_top(chunks[2], 1);
+            if skills.is_empty() {
+                frame.render_widget(
+                    Paragraph::new(texts::tui_skills_unmanaged_empty())
+                        .style(Style::default().fg(theme.dim))
+                        .wrap(Wrap { trim: false }),
+                    body_area,
+                );
+            } else {
+                let header = Row::new(vec![
+                    Cell::from(""),
+                    Cell::from(texts::header_name()),
+                    Cell::from(texts::tui_header_found_in()),
+                ])
+                .style(Style::default().fg(theme.dim).add_modifier(Modifier::BOLD));
+
+                let rows = skills.iter().map(|skill| {
+                    Row::new(vec![
+                        Cell::from(if selected.contains(&skill.directory) {
+                            texts::tui_marker_active()
+                        } else {
+                            texts::tui_marker_inactive()
+                        }),
+                        Cell::from(skill_display_name(&skill.name, &skill.directory).to_string()),
+                        Cell::from(skill.found_in.join(", ")),
+                    ])
+                });
+
+                let table = Table::new(
+                    rows,
+                    [
+                        Constraint::Length(2),
+                        Constraint::Percentage(70),
+                        Constraint::Percentage(30),
+                    ],
+                )
+                .header(header)
+                .block(Block::default().borders(Borders::NONE))
+                .row_highlight_style(selection_style(theme))
+                .highlight_symbol(highlight_symbol(theme));
+
+                let mut state = TableState::default();
+                state.select(Some(*selected_idx));
+                frame.render_stateful_widget(table, body_area, &mut state);
+            }
+        }
         Overlay::SkillsSyncMethodPicker { selected } => {
             let area = centered_rect_fixed(OVERLAY_FIXED_LG.0, 12, content_area);
             frame.render_widget(Clear, area);
@@ -4802,7 +4918,7 @@ mod tests {
             theme::theme_for,
         },
         provider::Provider,
-        services::skill::{InstalledSkill, SkillApps, SkillRepo, SyncMethod},
+        services::skill::{InstalledSkill, SkillApps, SkillRepo, SyncMethod, UnmanagedSkill},
     };
 
     #[test]
@@ -5471,7 +5587,38 @@ mod tests {
         let buf = render(&app, &data);
         let all = all_text(&buf);
 
-        assert!(all.contains("opencode=true"));
+        assert!(all.contains(texts::tui_label_enabled_for()));
+        assert!(all.contains("OpenCode"));
+        assert!(!all.contains("opencode=true"));
+    }
+
+    #[test]
+    fn skills_import_overlay_uses_friendly_copy() {
+        let _lock = lock_env();
+        let _no_color = EnvGuard::remove("NO_COLOR");
+
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Skills;
+        app.focus = Focus::Content;
+        app.overlay = Overlay::SkillsImportPicker {
+            skills: vec![UnmanagedSkill {
+                directory: "hello-skill".to_string(),
+                name: "Hello Skill".to_string(),
+                description: Some("A local skill".to_string()),
+                found_in: vec!["claude".to_string()],
+            }],
+            selected_idx: 0,
+            selected: std::iter::once("hello-skill".to_string()).collect(),
+        };
+
+        let data = minimal_data(&app.app_type);
+        let buf = render(&app, &data);
+        let all = all_text(&buf);
+
+        assert!(all.contains(texts::tui_skills_import_title()));
+        assert!(all.contains(texts::tui_skills_import_description()));
+        assert!(!all.contains("SSOT"));
+        assert!(!all.contains("unmanaged"));
     }
 
     #[test]
@@ -5524,6 +5671,32 @@ mod tests {
 
         assert!(!all.contains("validate"));
         assert!(!all.contains("校验"));
+    }
+
+    #[test]
+    fn mcp_page_uses_import_existing_label() {
+        let _lock = lock_env();
+        let _no_color = EnvGuard::remove("NO_COLOR");
+
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Mcp;
+        app.focus = Focus::Content;
+
+        let data = minimal_data(&app.app_type);
+        let buf = render(&app, &data);
+        let all = all_text(&buf);
+
+        assert!(all.contains(texts::tui_mcp_action_import_existing()));
+    }
+
+    #[test]
+    fn help_text_mentions_import_existing_for_mcp() {
+        let help = texts::tui_help_text();
+
+        assert!(
+            help.contains("i import existing") || help.contains("i 导入已有"),
+            "help text should use the same import wording for MCP and Skills"
+        );
     }
 
     #[test]

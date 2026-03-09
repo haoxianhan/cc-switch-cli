@@ -410,7 +410,9 @@ fn change_sync_method() -> Result<(), AppError> {
     let current = SkillServiceType::get_sync_method()?;
     println!(
         "{}",
-        info(&texts::skills_current_sync_method(&format!("{current:?}")))
+        info(&texts::skills_current_sync_method(
+            texts::tui_skills_sync_method_name(current),
+        ))
     );
     println!();
 
@@ -421,12 +423,7 @@ fn change_sync_method() -> Result<(), AppError> {
 
     impl fmt::Display for SyncMethodChoice {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            let label = match self.method {
-                SyncMethod::Auto => "auto (symlink → copy)",
-                SyncMethod::Symlink => "symlink",
-                SyncMethod::Copy => "copy",
-            };
-            write!(f, "{label}")
+            write!(f, "{}", texts::tui_skills_sync_method_name(self.method))
         }
     }
 
