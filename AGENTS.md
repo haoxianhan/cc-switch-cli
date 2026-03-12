@@ -3,7 +3,9 @@
 ## Project Structure
 
 - `src-tauri/`: Rust crate for the `cc-switch` CLI.
-  - `src-tauri/src/cli/`: command parsing + interactive TUI flows.
+  - `src-tauri/src/cli/`: command parsing, interactive entrypoints, and TUI integration.
+  - `src-tauri/src/cli/tui/`: the main interactive ratatui UI and its flows.
+  - `src-tauri/src/cli/interactive/`: interactive entrypoint and mode selection.
   - `src-tauri/src/services/`: core business logic (providers, MCP, prompts, config, env).
   - `src-tauri/tests/`: Rust integration tests (`*.rs`).
 - `assets/`: screenshots and partner assets used in docs.
@@ -12,13 +14,13 @@
 
 ## Maintenance Note (Temporary)
 
-- For now, we only actively maintain the interactive TUI flows. Non-interactive CLI commands/subcommands may lag behind and are not guaranteed to be up to date.
-- 暂时只维护交互式 TUI（Interactive Mode），非交互 CLI 命令先不维护。
+- For now, the interactive ratatui TUI is the primary maintained surface. Non-interactive CLI commands and some older subcommands may lag behind and are not guaranteed to stay fully aligned.
+- 暂时以交互式 ratatui TUI 为主要维护对象；非交互 CLI 和部分较老的子命令可能会滞后，不保证始终完全同步。
 
 ## Implementation Philosophy
 
 - 代码是负债，不是资产。优先少写代码、少加抽象、少引入新文件之间的耦合。
-- As a working rule, keep newly added or heavily edited code files under roughly 500 lines when practical. If a file grows past that, prefer splitting local-only logic into smaller modules.
+- 代码是负债而不是资产, 单文件最好不要超过600行,在review的时候也要额外注意这一点。
 - 后端实现若直接借鉴上游 `cc-switch`，应尽量保持行为、结构和命名与上游一致；本仓库特有的适配逻辑优先旁路拆出，不要为了“重构得更漂亮”而偏离上游。
 
 ## Build, Test, and Development Commands
@@ -40,7 +42,7 @@ Run commands from the repo root unless noted.
 
 ## CLI/TUI Parity
 
-- If you add a new user-facing feature/command, also add a corresponding entry in the interactive TUI flows (`src-tauri/src/cli/interactive/`) and i18n strings (`src-tauri/src/cli/i18n.rs`) so it’s discoverable from the TUI.
+- If you add a new user-facing feature/command, also add a corresponding entry in the interactive TUI flows (`src-tauri/src/cli/tui/`) and i18n strings (`src-tauri/src/cli/i18n.rs`) so it’s discoverable from the TUI.
 
 ## Testing Guidelines
 

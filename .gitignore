@@ -10,6 +10,8 @@ release/
 *.tsbuildinfo
 .npmrc
 CLAUDE.md
+AGENT.md
+AGENTS.md
 GEMINI.md
 *.claude
 *.codex
