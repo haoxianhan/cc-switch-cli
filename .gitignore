@@ -12,6 +12,7 @@ release/
 CLAUDE.md
 AGENT.md
 AGENTS.md
+plan.md
 GEMINI.md
 *.claude
 *.codex
