@@ -531,6 +531,109 @@ fn provider_add_form_codex_openai_official_sets_website_and_hides_api_key_field(
 }
 
 #[test]
+fn provider_add_form_claude_official_sets_upstream_website_and_hides_non_official_fields() {
+    let mut form = ProviderAddFormState::new(AppType::Claude);
+    let existing_ids = Vec::<String>::new();
+
+    form.apply_template(1, &existing_ids);
+
+    assert_eq!(
+        form.website_url.value,
+        "https://www.anthropic.com/claude-code"
+    );
+    assert_eq!(form.claude_base_url.value, "");
+
+    let fields = form.fields();
+    assert!(
+        !fields.contains(&ProviderAddField::ClaudeBaseUrl),
+        "official Claude provider should not show Base URL input"
+    );
+    assert!(
+        !fields.contains(&ProviderAddField::ClaudeApiFormat),
+        "official Claude provider should not show API format input"
+    );
+    assert!(
+        !fields.contains(&ProviderAddField::ClaudeApiKey),
+        "official Claude provider should not require API Key input"
+    );
+    assert!(
+        !fields.contains(&ProviderAddField::ClaudeModelConfig),
+        "official Claude provider should not show model override input"
+    );
+}
+
+#[test]
+fn provider_add_form_claude_official_save_preserves_existing_env_keys_like_upstream() {
+    let mut provider = Provider::with_id(
+        "claude-official".to_string(),
+        "Claude Official".to_string(),
+        json!({
+            "env": {
+                "ANTHROPIC_AUTH_TOKEN": "token-old",
+                "ANTHROPIC_BASE_URL": "https://relay.example",
+                "ANTHROPIC_MODEL": "model-main",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": "model-sonnet"
+            }
+        }),
+        None,
+    );
+    provider.website_url = Some("https://www.anthropic.com/claude-code".to_string());
+    provider.category = Some("official".to_string());
+    provider.meta = Some(crate::provider::ProviderMeta {
+        api_format: Some("openai_chat".to_string()),
+        ..Default::default()
+    });
+
+    let form = ProviderAddFormState::from_provider(AppType::Claude, &provider);
+    let out = form.to_provider_json_value();
+    let env = out["settingsConfig"]["env"]
+        .as_object()
+        .expect("settingsConfig.env should be object");
+    let meta = out["meta"].as_object().expect("meta should be object");
+
+    assert_eq!(
+        env.get("ANTHROPIC_AUTH_TOKEN")
+            .and_then(|value| value.as_str()),
+        Some("token-old")
+    );
+    assert_eq!(
+        env.get("ANTHROPIC_BASE_URL")
+            .and_then(|value| value.as_str()),
+        Some("https://relay.example")
+    );
+    assert_eq!(
+        env.get("ANTHROPIC_MODEL").and_then(|value| value.as_str()),
+        Some("model-main")
+    );
+    assert_eq!(
+        env.get("ANTHROPIC_DEFAULT_SONNET_MODEL")
+            .and_then(|value| value.as_str()),
+        Some("model-sonnet")
+    );
+    assert!(meta.get("apiFormat").is_none());
+    assert_eq!(out["category"], "official");
+}
+
+#[test]
+fn provider_add_form_claude_without_official_category_keeps_third_party_fields_visible() {
+    let mut provider = Provider::with_id(
+        "claude-official-like".to_string(),
+        "Claude Official".to_string(),
+        json!({"env": {"ANTHROPIC_BASE_URL": "https://relay.example"}}),
+        Some("https://www.anthropic.com/claude-code".to_string()),
+    );
+    provider.category = None;
+
+    let form = ProviderAddFormState::from_provider(AppType::Claude, &provider);
+    let fields = form.fields();
+
+    assert!(fields.contains(&ProviderAddField::ClaudeBaseUrl));
+    assert!(fields.contains(&ProviderAddField::ClaudeApiFormat));
+    assert!(fields.contains(&ProviderAddField::ClaudeApiKey));
+    assert!(fields.contains(&ProviderAddField::ClaudeModelConfig));
+}
+
+#[test]
 fn provider_add_form_codex_packycode_hides_env_key_field() {
     let mut form = ProviderAddFormState::new(AppType::Codex);
     let existing_ids = Vec::<String>::new();
@@ -635,8 +738,11 @@ fn provider_add_form_switching_back_to_custom_clears_template_values() {
 
     form.apply_template(1, &existing_ids);
     assert_eq!(form.name.value, "Claude Official");
-    assert_eq!(form.website_url.value, "https://anthropic.com");
-    assert_eq!(form.claude_base_url.value, "https://api.anthropic.com");
+    assert_eq!(
+        form.website_url.value,
+        "https://www.anthropic.com/claude-code"
+    );
+    assert_eq!(form.claude_base_url.value, "");
     assert_eq!(form.id.value, "claude-official");
 
     form.apply_template(0, &existing_ids);

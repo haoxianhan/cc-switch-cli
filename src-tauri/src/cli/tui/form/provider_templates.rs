@@ -1,7 +1,7 @@
 use crate::app_config::AppType;
 use serde_json::json;
 
-use super::{CodexWireApi, FormMode, GeminiAuthType, ProviderAddFormState};
+use super::{ClaudeApiFormat, CodexWireApi, FormMode, GeminiAuthType, ProviderAddFormState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProviderTemplateId {
@@ -200,9 +200,21 @@ impl ProviderAddFormState {
             match template_id {
                 ProviderTemplateId::Custom => {}
                 ProviderTemplateId::ClaudeOfficial => {
+                    self.extra = json!({
+                        "category": "official",
+                    });
                     self.name.set("Claude Official");
-                    self.website_url.set("https://anthropic.com");
-                    self.claude_base_url.set("https://api.anthropic.com");
+                    self.website_url
+                        .set("https://www.anthropic.com/claude-code");
+                    self.claude_api_key.set("");
+                    self.claude_base_url.set("");
+                    self.claude_api_format = ClaudeApiFormat::Anthropic;
+                    self.claude_model.set("");
+                    self.claude_reasoning_model.set("");
+                    self.claude_haiku_model.set("");
+                    self.claude_sonnet_model.set("");
+                    self.claude_opus_model.set("");
+                    self.claude_model_config_touched = false;
                 }
                 ProviderTemplateId::OpenAiOfficial => {
                     self.extra = json!({

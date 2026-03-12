@@ -116,10 +116,12 @@ impl ProviderAddFormState {
 
         match self.app_type {
             AppType::Claude => {
-                fields.push(ProviderAddField::ClaudeBaseUrl);
-                fields.push(ProviderAddField::ClaudeApiFormat);
-                fields.push(ProviderAddField::ClaudeApiKey);
-                fields.push(ProviderAddField::ClaudeModelConfig);
+                if !self.is_claude_official_provider() {
+                    fields.push(ProviderAddField::ClaudeBaseUrl);
+                    fields.push(ProviderAddField::ClaudeApiFormat);
+                    fields.push(ProviderAddField::ClaudeApiKey);
+                    fields.push(ProviderAddField::ClaudeModelConfig);
+                }
             }
             AppType::Codex => {
                 fields.push(ProviderAddField::CodexBaseUrl);
@@ -260,6 +262,17 @@ impl ProviderAddFormState {
 
     pub fn mark_claude_model_config_touched(&mut self) {
         self.claude_model_config_touched = true;
+    }
+
+    pub fn is_claude_official_provider(&self) -> bool {
+        if !matches!(self.app_type, AppType::Claude) {
+            return false;
+        }
+
+        self.extra
+            .get("category")
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case("official"))
     }
 
     pub fn is_codex_official_provider(&self) -> bool {

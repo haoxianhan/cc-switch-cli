@@ -37,6 +37,9 @@ impl ProviderAddFormState {
             );
             if matches!(self.app_type, AppType::Claude) {
                 match self.claude_api_format {
+                    _ if self.is_claude_official_provider() => {
+                        meta_obj.remove("apiFormat");
+                    }
                     ClaudeApiFormat::Anthropic => {
                         meta_obj.remove("apiFormat");
                     }
