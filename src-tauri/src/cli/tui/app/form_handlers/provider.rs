@@ -51,12 +51,18 @@ impl App {
     }
 
     pub(super) fn build_provider_form_save_action(&mut self, data: &UiData) -> Action {
-        let Some(FormState::ProviderAdd(provider)) = self.form.as_ref() else {
-            return Action::None;
+        let (mode_is_edit, missing_required_fields) = {
+            let Some(FormState::ProviderAdd(provider)) = self.form.as_mut() else {
+                return Action::None;
+            };
+
+            let can_submit = provider.has_required_fields()
+                && provider.ensure_generated_id(&collect_existing_provider_ids(data));
+            (provider.mode.is_edit(), !can_submit)
         };
 
-        if !provider.has_required_fields() {
-            if provider.mode.is_edit() {
+        if missing_required_fields {
+            if mode_is_edit {
                 self.push_toast(texts::tui_toast_provider_missing_name(), ToastKind::Warning);
             } else {
                 self.push_toast(
@@ -66,6 +72,10 @@ impl App {
             }
             return Action::None;
         }
+
+        let Some(FormState::ProviderAdd(provider)) = self.form.as_ref() else {
+            return Action::None;
+        };
 
         let provider_json = if matches!(provider.app_type, AppType::Codex) {
             provider.to_provider_json_value()

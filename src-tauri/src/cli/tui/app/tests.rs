@@ -2029,6 +2029,89 @@ mod tests {
     }
 
     #[test]
+    fn provider_add_form_ctrl_s_generates_hidden_id_from_name_before_submit() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let data = UiData::default();
+        app.on_key(key(KeyCode::Char('a')), &data);
+
+        if let Some(super::super::form::FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.focus = super::super::form::FormFocus::Fields;
+            form.name.set("Provider One");
+            form.id.set("");
+        } else {
+            panic!("expected ProviderAdd form");
+        }
+
+        let submit = app.on_key(ctrl(KeyCode::Char('s')), &data);
+        let Action::EditorSubmit { submit, content } = submit else {
+            panic!("Ctrl+S should submit when name is present");
+        };
+
+        assert!(matches!(submit, EditorSubmit::ProviderAdd));
+        assert!(
+            content.contains("\"id\": \"provider-one\""),
+            "save should auto-generate an id from name before submit"
+        );
+        assert!(content.contains("\"name\": \"Provider One\""));
+    }
+
+    #[test]
+    fn provider_add_form_missing_fields_toast_mentions_name_only() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let data = UiData::default();
+        app.on_key(key(KeyCode::Char('a')), &data);
+
+        let submit = app.on_key(ctrl(KeyCode::Char('s')), &data);
+        assert!(matches!(submit, Action::None));
+        let Some(Toast {
+            message,
+            kind: ToastKind::Warning,
+            ..
+        }) = app.toast.as_ref()
+        else {
+            panic!("expected warning toast for missing add-form fields");
+        };
+        assert!(message.contains("name"));
+        assert!(message.contains("generated automatically"));
+        assert!(!message.contains("id and name"));
+        assert!(!message.contains("in JSON"));
+    }
+
+    #[test]
+    fn provider_add_form_ctrl_s_rejects_name_that_cannot_generate_id() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let data = UiData::default();
+        app.on_key(key(KeyCode::Char('a')), &data);
+
+        if let Some(super::super::form::FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.focus = super::super::form::FormFocus::Fields;
+            form.name.set("!!!");
+            form.id.set("");
+        } else {
+            panic!("expected ProviderAdd form");
+        }
+
+        let submit = app.on_key(ctrl(KeyCode::Char('s')), &data);
+        assert!(matches!(submit, Action::None));
+        assert!(matches!(
+            app.toast.as_ref(),
+            Some(Toast {
+                kind: ToastKind::Warning,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn provider_add_form_tab_cycles_focus() {
         let mut app = App::new(Some(AppType::Claude));
         app.route = Route::Providers;

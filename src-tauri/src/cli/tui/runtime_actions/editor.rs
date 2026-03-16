@@ -246,7 +246,7 @@ fn submit_provider_add(
     ctx: &mut RuntimeActionContext<'_>,
     content: String,
 ) -> Result<(), AppError> {
-    let provider: Provider = match serde_json::from_str(&content) {
+    let mut provider: Provider = match serde_json::from_str(&content) {
         Ok(p) => p,
         Err(e) => {
             ctx.app.push_toast(
@@ -257,7 +257,7 @@ fn submit_provider_add(
         }
     };
 
-    if provider.id.trim().is_empty() || provider.name.trim().is_empty() {
+    if provider.name.trim().is_empty() {
         ctx.app.push_toast(
             texts::tui_toast_provider_add_missing_fields(),
             ToastKind::Warning,
@@ -266,6 +266,26 @@ fn submit_provider_add(
     }
 
     let state = load_state()?;
+    let existing_ids = {
+        let config = state.config.read().map_err(AppError::from)?;
+        config
+            .get_manager(&ctx.app.app_type)
+            .map(|manager| manager.providers.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default()
+    };
+    let Some(provider_id) = crate::cli::tui::form::resolve_provider_id_for_submit(
+        &provider.name,
+        &provider.id,
+        &existing_ids,
+    ) else {
+        ctx.app.push_toast(
+            texts::tui_toast_provider_add_missing_fields(),
+            ToastKind::Warning,
+        );
+        return Ok(());
+    };
+    provider.id = provider_id;
+
     match ProviderService::add(&state, ctx.app.app_type.clone(), provider) {
         Ok(true) => {
             ctx.app.editor = None;
@@ -508,4 +528,180 @@ fn submit_webdav_settings(
         .push_toast(texts::tui_toast_webdav_settings_saved(), ToastKind::Success);
     *ctx.data = UiData::load(&ctx.app.app_type)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+    use std::path::Path;
+
+    use serial_test::serial;
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::cli::tui::app::{App, Toast};
+    use crate::cli::tui::runtime_systems::RequestTracker;
+    use crate::cli::tui::terminal::TuiTerminal;
+
+    struct EnvGuard {
+        old_home: Option<OsString>,
+        old_userprofile: Option<OsString>,
+    }
+
+    impl EnvGuard {
+        fn set_home(home: &Path) -> Self {
+            let old_home = std::env::var_os("HOME");
+            let old_userprofile = std::env::var_os("USERPROFILE");
+            std::env::set_var("HOME", home);
+            std::env::set_var("USERPROFILE", home);
+            Self {
+                old_home,
+                old_userprofile,
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.old_home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+            match &self.old_userprofile {
+                Some(value) => std::env::set_var("USERPROFILE", value),
+                None => std::env::remove_var("USERPROFILE"),
+            }
+        }
+    }
+
+    fn runtime_ctx(
+        app_type: AppType,
+    ) -> (
+        TempDir,
+        EnvGuard,
+        TuiTerminal,
+        App,
+        UiData,
+        RequestTracker,
+        RequestTracker,
+        RequestTracker,
+    ) {
+        let temp_home = TempDir::new().expect("create temp home");
+        let env = EnvGuard::set_home(temp_home.path());
+
+        let terminal = TuiTerminal::new_for_test().expect("create test terminal");
+        let app = App::new(Some(app_type.clone()));
+        let data = UiData::load(&app_type).expect("load ui data");
+        (
+            temp_home,
+            env,
+            terminal,
+            app,
+            data,
+            RequestTracker::default(),
+            RequestTracker::default(),
+            RequestTracker::default(),
+        )
+    }
+
+    #[test]
+    #[serial]
+    fn submit_provider_add_generates_id_when_name_is_valid() {
+        let (
+            _temp_home,
+            _env,
+            mut terminal,
+            mut app,
+            mut data,
+            mut proxy_loading,
+            mut webdav_loading,
+            mut update_check,
+        ) = runtime_ctx(AppType::Claude);
+
+        let mut ctx = RuntimeActionContext {
+            terminal: &mut terminal,
+            app: &mut app,
+            data: &mut data,
+            speedtest_req_tx: None,
+            stream_check_req_tx: None,
+            skills_req_tx: None,
+            proxy_req_tx: None,
+            proxy_loading: &mut proxy_loading,
+            local_env_req_tx: None,
+            webdav_req_tx: None,
+            webdav_loading: &mut webdav_loading,
+            update_req_tx: None,
+            update_check: &mut update_check,
+            model_fetch_req_tx: None,
+        };
+
+        submit_provider_add(
+            &mut ctx,
+            r#"{"id":"","name":"Provider One","settingsConfig":{"env":{"ANTHROPIC_BASE_URL":"https://example.com"}}}"#
+                .to_string(),
+        )
+        .expect("submit should succeed");
+
+        let refreshed = UiData::load(&AppType::Claude).expect("reload ui data");
+        assert!(
+            refreshed
+                .providers
+                .rows
+                .iter()
+                .any(|row| row.id == "provider-one"),
+            "runtime submit should auto-generate and persist an id"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn submit_provider_add_rejects_name_that_cannot_generate_id() {
+        let (
+            _temp_home,
+            _env,
+            mut terminal,
+            mut app,
+            mut data,
+            mut proxy_loading,
+            mut webdav_loading,
+            mut update_check,
+        ) = runtime_ctx(AppType::Claude);
+
+        let mut ctx = RuntimeActionContext {
+            terminal: &mut terminal,
+            app: &mut app,
+            data: &mut data,
+            speedtest_req_tx: None,
+            stream_check_req_tx: None,
+            skills_req_tx: None,
+            proxy_req_tx: None,
+            proxy_loading: &mut proxy_loading,
+            local_env_req_tx: None,
+            webdav_req_tx: None,
+            webdav_loading: &mut webdav_loading,
+            update_req_tx: None,
+            update_check: &mut update_check,
+            model_fetch_req_tx: None,
+        };
+
+        submit_provider_add(
+            &mut ctx,
+            r#"{"id":"","name":"!!!","settingsConfig":{"env":{"ANTHROPIC_BASE_URL":"https://example.com"}}}"#
+                .to_string(),
+        )
+        .expect("submit should return without crashing");
+
+        let refreshed = UiData::load(&AppType::Claude).expect("reload ui data");
+        assert!(
+            refreshed.providers.rows.is_empty(),
+            "runtime submit should refuse names that still yield an empty id"
+        );
+        assert!(matches!(
+            ctx.app.toast.as_ref(),
+            Some(Toast {
+                kind: ToastKind::Warning,
+                ..
+            })
+        ));
+    }
 }

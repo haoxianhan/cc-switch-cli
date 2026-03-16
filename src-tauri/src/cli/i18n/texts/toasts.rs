@@ -552,9 +552,9 @@ pub fn tui_toast_provider_add_finished() -> &'static str {
 
 pub fn tui_toast_provider_add_missing_fields() -> &'static str {
     if is_chinese() {
-        "请在 JSON 中填写 id 和 name。"
+        "请填写 name，id 会自动生成。"
     } else {
-        "Please fill in id and name in JSON."
+        "Please fill in name. id will be generated automatically."
     }
 }
 
