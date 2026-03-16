@@ -7,14 +7,22 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+#[cfg(test)]
+use ratatui::backend::TestBackend;
 use ratatui::prelude::Size;
 use ratatui::{backend::CrosstermBackend, Terminal};
 
 use crate::error::AppError;
 
 pub struct TuiTerminal {
-    terminal: Terminal<CrosstermBackend<Stdout>>,
+    terminal: TerminalHandle,
     active: bool,
+}
+
+enum TerminalHandle {
+    Stdout(Terminal<CrosstermBackend<Stdout>>),
+    #[cfg(test)]
+    Test(Terminal<TestBackend>),
 }
 
 pub struct PanicRestoreHookGuard {
@@ -120,14 +128,15 @@ impl TuiTerminal {
         };
 
         Ok(Self {
-            terminal,
+            terminal: TerminalHandle::Stdout(terminal),
             active: true,
         })
     }
 
     #[cfg(test)]
     pub(crate) fn new_for_test() -> Result<Self, AppError> {
-        let backend = CrosstermBackend::new(io::stdout());
+        // Use an in-memory backend so test helpers never compete for the real TTY.
+        let backend = TestBackend::new(120, 40);
         let terminal = Terminal::new(backend).map_err(|e| {
             AppError::localized(
                 "tui_terminal_error",
@@ -137,7 +146,7 @@ impl TuiTerminal {
         })?;
 
         Ok(Self {
-            terminal,
+            terminal: TerminalHandle::Test(terminal),
             active: false,
         })
     }
@@ -146,23 +155,31 @@ impl TuiTerminal {
     where
         F: FnOnce(&mut ratatui::Frame<'_>),
     {
-        self.terminal.draw(f).map(|_| ()).map_err(|e| {
-            AppError::localized(
-                "tui_terminal_error",
-                format!("终端错误: {}", e.to_string()),
-                format!("Terminal error: {}", e.to_string()),
-            )
-        })
+        match &mut self.terminal {
+            TerminalHandle::Stdout(terminal) => terminal.draw(f).map(|_| ()).map_err(|e| {
+                AppError::localized(
+                    "tui_terminal_error",
+                    format!("终端错误: {}", e.to_string()),
+                    format!("Terminal error: {}", e.to_string()),
+                )
+            }),
+            #[cfg(test)]
+            TerminalHandle::Test(terminal) => terminal.draw(f).map(|_| ()).map_err(|e| match e {}),
+        }
     }
 
     pub fn size(&self) -> Result<Size, AppError> {
-        self.terminal.size().map_err(|e| {
-            AppError::localized(
-                "tui_terminal_error",
-                format!("终端错误: {}", e.to_string()),
-                format!("Terminal error: {}", e.to_string()),
-            )
-        })
+        match &self.terminal {
+            TerminalHandle::Stdout(terminal) => terminal.size().map_err(|e| {
+                AppError::localized(
+                    "tui_terminal_error",
+                    format!("终端错误: {}", e.to_string()),
+                    format!("Terminal error: {}", e.to_string()),
+                )
+            }),
+            #[cfg(test)]
+            TerminalHandle::Test(terminal) => terminal.size().map_err(|e| match e {}),
+        }
     }
 
     pub fn with_terminal_restored<T>(
@@ -205,21 +222,33 @@ impl TuiTerminal {
             return Ok(());
         }
 
+        #[cfg(test)]
+        if matches!(self.terminal, TerminalHandle::Test(_)) {
+            self.active = false;
+            return Ok(());
+        }
+
         let mut first_err: Option<AppError> = None;
 
         if let Err(e) = disable_raw_mode() {
             record_err(&mut first_err, e);
         }
 
-        if let Err(e) = execute!(
-            self.terminal.backend_mut(),
-            cursor::Show,
-            LeaveAlternateScreen,
-            DisableMouseCapture
-        ) {
-            record_err(&mut first_err, e);
+        match &mut self.terminal {
+            TerminalHandle::Stdout(terminal) => {
+                if let Err(e) = execute!(
+                    terminal.backend_mut(),
+                    cursor::Show,
+                    LeaveAlternateScreen,
+                    DisableMouseCapture
+                ) {
+                    record_err(&mut first_err, e);
+                }
+                let _ = terminal.show_cursor();
+            }
+            #[cfg(test)]
+            TerminalHandle::Test(_) => unreachable!("test terminal should return early"),
         }
-        let _ = self.terminal.show_cursor();
 
         if let Some(err) = first_err {
             Err(err)
@@ -234,23 +263,42 @@ impl TuiTerminal {
             return Ok(());
         }
 
+        #[cfg(test)]
+        if let TerminalHandle::Test(terminal) = &mut self.terminal {
+            terminal.clear().map_err(|e| {
+                AppError::localized(
+                    "tui_terminal_error",
+                    format!("终端错误: {}", e.to_string()),
+                    format!("Terminal error: {}", e.to_string()),
+                )
+            })?;
+            self.active = true;
+            return Ok(());
+        }
+
         let mut first_err: Option<AppError> = None;
 
         if let Err(e) = enable_raw_mode() {
             record_err(&mut first_err, e);
         }
 
-        if let Err(e) = execute!(
-            self.terminal.backend_mut(),
-            EnterAlternateScreen,
-            EnableMouseCapture,
-            cursor::Hide
-        ) {
-            record_err(&mut first_err, e);
-        }
+        match &mut self.terminal {
+            TerminalHandle::Stdout(terminal) => {
+                if let Err(e) = execute!(
+                    terminal.backend_mut(),
+                    EnterAlternateScreen,
+                    EnableMouseCapture,
+                    cursor::Hide
+                ) {
+                    record_err(&mut first_err, e);
+                }
 
-        if let Err(e) = self.terminal.clear() {
-            record_err(&mut first_err, e);
+                if let Err(e) = terminal.clear() {
+                    record_err(&mut first_err, e);
+                }
+            }
+            #[cfg(test)]
+            TerminalHandle::Test(_) => unreachable!("test terminal should return early"),
         }
 
         if let Some(err) = first_err {
@@ -265,5 +313,22 @@ impl TuiTerminal {
 impl Drop for TuiTerminal {
     fn drop(&mut self) {
         let _ = self.restore_best_effort();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TuiTerminal;
+
+    #[test]
+    fn test_terminal_can_activate_and_restore_without_real_tty() {
+        let mut terminal = TuiTerminal::new_for_test().expect("create test terminal");
+
+        terminal
+            .activate_best_effort()
+            .expect("test terminal should activate without a real tty");
+        terminal
+            .restore_best_effort()
+            .expect("test terminal should restore without a real tty");
     }
 }
