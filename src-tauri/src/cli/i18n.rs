@@ -3305,6 +3305,14 @@ pub mod texts {
         }
     }
 
+    pub fn tui_openclaw_agents_not_configured_suffix() -> &'static str {
+        if is_chinese() {
+            "供应商未配置"
+        } else {
+            "not configured"
+        }
+    }
+
     pub fn tui_openclaw_agents_not_in_list(value: &str) -> String {
         if is_chinese() {
             format!("{value} (供应商未配置)")

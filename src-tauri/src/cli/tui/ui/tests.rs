@@ -1,5 +1,10 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::{backend::TestBackend, buffer::Buffer, Terminal};
+use ratatui::{
+    backend::TestBackend,
+    buffer::Buffer,
+    style::{Color, Modifier},
+    Terminal,
+};
 use serde_json::json;
 use serial_test::serial;
 use std::ffi::OsString;
@@ -388,21 +393,37 @@ fn line_index(text: &str, needle: &str) -> usize {
         .unwrap_or_else(|| panic!("missing `{needle}` in:\n{text}"))
 }
 
-fn last_line_index(text: &str, needle: &str) -> usize {
-    text.lines()
-        .collect::<Vec<_>>()
-        .into_iter()
-        .enumerate()
-        .rev()
-        .find(|(_, line)| line.contains(needle))
-        .map(|(index, _)| index)
-        .unwrap_or_else(|| panic!("missing `{needle}` in:\n{text}"))
-}
-
 fn line_with<'a>(text: &'a str, needle: &str) -> &'a str {
     text.lines()
         .find(|line| line.contains(needle))
         .unwrap_or_else(|| panic!("missing `{needle}` in:\n{text}"))
+}
+
+fn column_in_line(line: &str, needle: &str) -> usize {
+    line.find(needle)
+        .unwrap_or_else(|| panic!("missing `{needle}` in line:\n{line}"))
+}
+
+fn display_column_in_line(line: &str, needle: &str) -> usize {
+    let byte_idx = column_in_line(line, needle);
+    UnicodeWidthStr::width(&line[..byte_idx])
+}
+
+fn content_origin_x(app: &App, buf: &Buffer) -> u16 {
+    let theme = theme_for(&app.app_type);
+    super::nav_pane_width(&theme).min(buf.area.width)
+}
+
+fn content_cell_at<'a>(
+    app: &App,
+    buf: &'a Buffer,
+    content_x: usize,
+    content_y: usize,
+) -> &'a ratatui::buffer::Cell {
+    &buf[(
+        content_origin_x(app, buf) + content_x as u16,
+        content_y as u16,
+    )]
 }
 
 fn block_title_needle(title: &str) -> String {
@@ -4370,30 +4391,9 @@ fn openclaw_agents_route_render_groups_model_runtime_and_save_sections() {
         &content,
         &block_title_needle(texts::tui_openclaw_agents_runtime_section()),
     );
-    let default_model = line_index(
-        &content,
-        &buffer_cell_text(&format!(
-            "{}: {}",
-            texts::tui_openclaw_agents_primary_model(),
-            "missing/current-primary (供应商未配置)"
-        )),
-    );
-    let fallbacks = line_index(
-        &content,
-        &buffer_cell_text(&format!(
-            "{}: {}",
-            texts::tui_openclaw_agents_fallback_models(),
-            "目录供应商 / 回退 A"
-        )),
-    );
-    let off_catalog_fallback = line_index(
-        &content,
-        &buffer_cell_text(&format!(
-            "{}: {}",
-            texts::tui_openclaw_agents_fallback_models(),
-            "missing/off-catalog (供应商未配置)"
-        )),
-    );
+    let default_model = line_index(&content, &buffer_cell_text("missing/current-primary"));
+    let fallbacks = line_index(&content, &buffer_cell_text("目录供应商 / 回退 A"));
+    let off_catalog_fallback = line_index(&content, &buffer_cell_text("missing/off-catalog"));
     let add_fallback = line_index(
         &content,
         &buffer_cell_text(texts::tui_openclaw_agents_add_fallback_disabled()),
@@ -4439,6 +4439,41 @@ fn openclaw_agents_route_render_groups_model_runtime_and_save_sections() {
 }
 
 #[test]
+fn openclaw_agents_route_render_load_failed_branch_keeps_description_spacer_and_message() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawAgents;
+    app.focus = Focus::Content;
+
+    let mut data = minimal_data(&app.app_type);
+    data.config.openclaw_agents_defaults = None;
+    data.config.openclaw_warnings = Some(vec![crate::openclaw_config::OpenClawHealthWarning {
+        code: "config_parse_failed".to_string(),
+        message: "Failed to parse agents.defaults".to_string(),
+        path: Some("agents.defaults".to_string()),
+    }]);
+
+    let rendered = render_with_size(&app, &data, 100, 16);
+    let content = content_text(&app, &rendered);
+    let description_index = line_index(
+        &content,
+        &buffer_cell_text("Manage agents.defaults in openclaw.json"),
+    );
+    let message_index = line_index(
+        &content,
+        &buffer_cell_text("The current agents.defaults section could not be loaded."),
+    );
+    let lines = content.lines().collect::<Vec<_>>();
+    let spacer = lines[description_index + 1];
+
+    assert!(description_index + 1 < message_index, "{content}");
+    assert!(spacer.chars().all(|ch| ch == ' ' || ch == '│'), "{content}");
+}
+
+#[test]
 fn openclaw_agents_route_render_uses_single_line_model_and_runtime_rows() {
     let _lock = lock_env();
     let _lang = use_test_language(Language::Chinese);
@@ -4476,22 +4511,8 @@ fn openclaw_agents_route_render_uses_single_line_model_and_runtime_rows() {
     let rendered = render(&app, &data);
     let all = all_text(&rendered);
     let content = content_text(&app, &rendered);
-    let primary_row = line_with(
-        &content,
-        &buffer_cell_text(&format!(
-            "{}: {}",
-            texts::tui_openclaw_agents_primary_model(),
-            "目录供应商 / 主模型"
-        )),
-    );
-    let fallback_row = line_with(
-        &content,
-        &buffer_cell_text(&format!(
-            "{}: {}",
-            texts::tui_openclaw_agents_fallback_models(),
-            "目录供应商 / 回退 A"
-        )),
-    );
+    let primary_row = line_with(&content, &buffer_cell_text("目录供应商 / 主模型"));
+    let fallback_row = line_with(&content, &buffer_cell_text("目录供应商 / 回退 A"));
     let action_row = line_with(
         &content,
         &format!(
@@ -4499,26 +4520,33 @@ fn openclaw_agents_route_render_uses_single_line_model_and_runtime_rows() {
             buffer_cell_text(texts::tui_openclaw_agents_add_fallback())
         ),
     );
-    let workspace_row = line_with(
-        &content,
-        &buffer_cell_text(&format!(
-            "{}: [{}]",
-            texts::tui_openclaw_agents_workspace(),
-            "./workspace"
-        )),
-    );
+    let workspace_row = line_with(&content, &buffer_cell_text("[./workspace]"));
 
     assert!(
         primary_row.contains(&buffer_cell_text("目录供应商 / 主模型")),
         "{all}"
     );
     assert!(
+        primary_row.contains(&buffer_cell_text(texts::tui_openclaw_agents_primary_model())),
+        "{all}"
+    );
+    assert!(
         fallback_row.contains(&buffer_cell_text("目录供应商 / 回退 A")),
+        "{all}"
+    );
+    assert!(
+        fallback_row.contains(&buffer_cell_text(
+            texts::tui_openclaw_agents_fallback_models()
+        )),
         "{all}"
     );
     assert!(action_row.contains('+'), "{all}");
     assert!(
         workspace_row.contains(&buffer_cell_text("./workspace")),
+        "{all}"
+    );
+    assert!(
+        workspace_row.contains(&buffer_cell_text(texts::tui_openclaw_agents_workspace())),
         "{all}"
     );
     assert!(workspace_row.contains('['), "{all}");
@@ -4554,49 +4582,147 @@ fn openclaw_agents_route_render_renders_runtime_value_rows_with_bracketed_values
 
     let rendered = render_with_size(&app, &data, 140, 40);
     let content = content_text(&app, &rendered);
-    let workspace_row = line_with(
-        &content,
-        &buffer_cell_text(&format!(
-            "{}: [{}]",
-            texts::tui_openclaw_agents_workspace(),
-            "./workspace"
-        )),
-    );
-    let timeout_row = line_with(
-        &content,
-        &buffer_cell_text(&format!(
-            "{}: [{}]",
-            texts::tui_openclaw_agents_timeout(),
-            "42"
-        )),
-    );
+    let workspace_row = line_with(&content, &buffer_cell_text("[./workspace]"));
+    let timeout_row = line_with(&content, &buffer_cell_text("[42]"));
     let context_row = line_with(
         &content,
-        &buffer_cell_text(&format!(
-            "{}: [{}]",
-            texts::tui_openclaw_agents_context_tokens(),
-            "false (preserved non-standard value)"
-        )),
+        &buffer_cell_text("[false (preserved non-standard value)]"),
     );
-    let max_row = line_with(
-        &content,
-        &buffer_cell_text(&format!(
-            "{}: [{}]",
-            texts::tui_openclaw_agents_max_concurrent(),
-            "2"
-        )),
-    );
+    let max_row = line_with(&content, &buffer_cell_text("[2]"));
 
     assert!(workspace_row.contains('['), "{content}");
     assert!(timeout_row.contains('['), "{content}");
     assert!(context_row.contains('['), "{content}");
     assert!(max_row.contains('['), "{content}");
     assert!(
+        workspace_row.contains(&buffer_cell_text(texts::tui_openclaw_agents_workspace())),
+        "{content}"
+    );
+    assert!(
+        timeout_row.contains(&buffer_cell_text(texts::tui_openclaw_agents_timeout())),
+        "{content}"
+    );
+    assert!(
+        context_row.contains(&buffer_cell_text(
+            texts::tui_openclaw_agents_context_tokens()
+        )),
+        "{content}"
+    );
+    assert!(
+        max_row.contains(&buffer_cell_text(
+            texts::tui_openclaw_agents_max_concurrent()
+        )),
+        "{content}"
+    );
+    assert!(
         content.contains(texts::tui_openclaw_agents_preserved_runtime_notice()),
         "{content}"
     );
     assert!(
         content.contains(texts::tui_openclaw_agents_preserved_fields_label()),
+        "{content}"
+    );
+}
+
+#[test]
+fn openclaw_agents_route_render_shifts_rows_two_columns_left_and_keeps_value_columns_aligned() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawAgents;
+    app.focus = Focus::Content;
+
+    let mut data = minimal_data(&app.app_type);
+    data.providers.rows = vec![openclaw_provider_row(
+        "demo",
+        "Demo Provider",
+        &[
+            ("primary", "Primary"),
+            ("fallback-a", "Fallback A"),
+            ("fallback-b", "Fallback B"),
+        ],
+    )];
+    data.config.openclaw_agents_defaults = Some(crate::openclaw_config::OpenClawAgentsDefaults {
+        model: Some(crate::openclaw_config::OpenClawDefaultModel {
+            primary: "demo/primary".to_string(),
+            fallbacks: vec!["demo/fallback-a".to_string()],
+            extra: std::collections::HashMap::new(),
+        }),
+        models: None,
+        extra: std::collections::HashMap::from([
+            ("workspace".to_string(), json!("./workspace")),
+            ("timeoutSeconds".to_string(), json!(42)),
+            ("contextTokens".to_string(), json!(8192)),
+            ("maxConcurrent".to_string(), json!(2)),
+        ]),
+    });
+
+    let rendered = render_with_size(&app, &data, 140, 40);
+    let content = content_text(&app, &rendered);
+    let primary_row = line_with(&content, &buffer_cell_text("Demo Provider / Primary"));
+    let fallback_row = line_with(&content, &buffer_cell_text("Demo Provider / Fallback A"));
+    let workspace_row = line_with(&content, &buffer_cell_text("[./workspace]"));
+    let add_row = line_with(
+        &content,
+        &buffer_cell_text(&format!("+ {}", texts::tui_openclaw_agents_add_fallback())),
+    );
+
+    let primary_label_start = display_column_in_line(
+        primary_row,
+        &buffer_cell_text(texts::tui_openclaw_agents_primary_model()),
+    );
+    let fallback_label_start = display_column_in_line(
+        fallback_row,
+        &buffer_cell_text(texts::tui_openclaw_agents_fallback_models()),
+    );
+    let workspace_label_start = display_column_in_line(
+        workspace_row,
+        &buffer_cell_text(texts::tui_openclaw_agents_workspace()),
+    );
+    let primary_value_start =
+        display_column_in_line(primary_row, &buffer_cell_text("Demo Provider / Primary"));
+    let fallback_value_start = display_column_in_line(
+        fallback_row,
+        &buffer_cell_text("Demo Provider / Fallback A"),
+    );
+    let workspace_value_start =
+        display_column_in_line(workspace_row, &buffer_cell_text("[./workspace]"));
+    let add_value_start = display_column_in_line(
+        add_row,
+        &buffer_cell_text(&format!("+ {}", texts::tui_openclaw_agents_add_fallback())),
+    );
+    let primary_block_border_start = UnicodeWidthStr::width(
+        &primary_row[..primary_row[..column_in_line(
+            primary_row,
+            &buffer_cell_text(texts::tui_openclaw_agents_primary_model()),
+        )]
+            .rfind('│')
+            .expect("primary row should include section block border")],
+    );
+    let workspace_block_border_start = UnicodeWidthStr::width(
+        &workspace_row[..workspace_row[..column_in_line(
+            workspace_row,
+            &buffer_cell_text(texts::tui_openclaw_agents_workspace()),
+        )]
+            .rfind('│')
+            .expect("workspace row should include section block border")],
+    );
+
+    assert_eq!(primary_label_start, fallback_label_start, "{content}");
+    assert_eq!(primary_label_start, workspace_label_start, "{content}");
+    assert_eq!(primary_value_start, fallback_value_start, "{content}");
+    assert_eq!(primary_value_start, workspace_value_start, "{content}");
+    assert_eq!(primary_value_start, add_value_start, "{content}");
+    assert_eq!(
+        primary_label_start - primary_block_border_start,
+        4,
+        "{content}"
+    );
+    assert_eq!(
+        workspace_label_start - workspace_block_border_start,
+        4,
         "{content}"
     );
 }
@@ -4613,24 +4739,22 @@ fn openclaw_agents_route_render_keeps_primary_row_visible_in_short_viewport() {
 
     let mut data = minimal_data(&app.app_type);
     data.providers.rows = vec![openclaw_provider_row(
-        "demo",
-        "Demo Provider",
+        "d",
+        "D",
         &[
-            ("primary", "Primary"),
-            ("fallback-1", "Fallback 01"),
-            ("fallback-2", "Fallback 02"),
-            ("fallback-3", "Fallback 03"),
-            ("fallback-4", "Fallback 04"),
-            ("fallback-5", "Fallback 05"),
-            ("fallback-6", "Fallback 06"),
+            ("p", "P"),
+            ("f1", "F1"),
+            ("f2", "F2"),
+            ("f3", "F3"),
+            ("f4", "F4"),
+            ("f5", "F5"),
+            ("f6", "F6"),
         ],
     )];
     data.config.openclaw_agents_defaults = Some(crate::openclaw_config::OpenClawAgentsDefaults {
         model: Some(crate::openclaw_config::OpenClawDefaultModel {
-            primary: "demo/primary".to_string(),
-            fallbacks: (1..=6)
-                .map(|index| format!("demo/fallback-{index}"))
-                .collect(),
+            primary: "d/p".to_string(),
+            fallbacks: (1..=6).map(|index| format!("d/f{index}")).collect(),
             extra: std::collections::HashMap::new(),
         }),
         models: None,
@@ -4649,14 +4773,12 @@ fn openclaw_agents_route_render_keeps_primary_row_visible_in_short_viewport() {
     form.row = 0;
     app.openclaw_agents_form = Some(form);
 
-    let rendered = render_with_size(&app, &data, 72, 11);
+    let rendered = render_with_size(&app, &data, 72, 12);
     let content = content_text(&app, &rendered);
 
+    let primary_row = line_with(&content, &buffer_cell_text("D / P"));
     assert!(
-        content.contains(&format!(
-            "> {}:",
-            buffer_cell_text(texts::tui_openclaw_agents_primary_model())
-        )),
+        primary_row.contains(&buffer_cell_text(texts::tui_openclaw_agents_primary_model())),
         "{content}"
     );
 }
@@ -4675,20 +4797,18 @@ fn openclaw_agents_route_render_keeps_selected_fallback_row_visible_in_short_vie
     let models = std::iter::once(("primary", "Primary"))
         .chain((1..=10).map(|index| {
             let id = format!("fallback-{index}");
-            let label = format!("Fallback {index:02}");
+            let label = format!("F{index:02}");
             (
                 Box::leak(id.into_boxed_str()) as &str,
                 Box::leak(label.into_boxed_str()) as &str,
             )
         }))
         .collect::<Vec<_>>();
-    data.providers.rows = vec![openclaw_provider_row("demo", "Demo Provider", &models)];
+    data.providers.rows = vec![openclaw_provider_row("d", "D", &models)];
     data.config.openclaw_agents_defaults = Some(crate::openclaw_config::OpenClawAgentsDefaults {
         model: Some(crate::openclaw_config::OpenClawDefaultModel {
-            primary: "demo/primary".to_string(),
-            fallbacks: (1..=9)
-                .map(|index| format!("demo/fallback-{index}"))
-                .collect(),
+            primary: "d/primary".to_string(),
+            fallbacks: (1..=9).map(|index| format!("d/fallback-{index}")).collect(),
             extra: std::collections::HashMap::new(),
         }),
         models: None,
@@ -4702,13 +4822,13 @@ fn openclaw_agents_route_render_keeps_selected_fallback_row_visible_in_short_vie
     form.row = 8;
     app.openclaw_agents_form = Some(form);
 
-    let rendered = render_with_size(&app, &data, 72, 14);
+    let rendered = render_with_size(&app, &data, 72, 13);
     let content = content_text(&app, &rendered);
 
+    let fallback_row = line_with(&content, &buffer_cell_text("D / F09"));
     assert!(
-        content.contains(&format!(
-            "> {}:",
-            buffer_cell_text(texts::tui_openclaw_agents_fallback_models())
+        fallback_row.contains(&buffer_cell_text(
+            texts::tui_openclaw_agents_fallback_models()
         )),
         "{content}"
     );
@@ -4717,7 +4837,7 @@ fn openclaw_agents_route_render_keeps_selected_fallback_row_visible_in_short_vie
 #[test]
 fn openclaw_agents_route_render_keeps_add_fallback_row_visible_in_short_viewport() {
     let _lock = lock_env();
-    let _lang = use_test_language(Language::English);
+    let _lang = use_test_language(Language::Chinese);
     let _no_color = EnvGuard::remove("NO_COLOR");
 
     let mut app = App::new(Some(AppType::OpenClaw));
@@ -4725,23 +4845,21 @@ fn openclaw_agents_route_render_keeps_add_fallback_row_visible_in_short_viewport
     app.focus = Focus::Content;
 
     let mut data = minimal_data(&app.app_type);
-    let models = std::iter::once(("primary", "Primary"))
+    let models = std::iter::once(("primary", "主"))
         .chain((1..=10).map(|index| {
             let id = format!("fallback-{index}");
-            let label = format!("Fallback {index:02}");
+            let label = format!("回{index}");
             (
                 Box::leak(id.into_boxed_str()) as &str,
                 Box::leak(label.into_boxed_str()) as &str,
             )
         }))
         .collect::<Vec<_>>();
-    data.providers.rows = vec![openclaw_provider_row("demo", "Demo Provider", &models)];
+    data.providers.rows = vec![openclaw_provider_row("d", "目", &models)];
     data.config.openclaw_agents_defaults = Some(crate::openclaw_config::OpenClawAgentsDefaults {
         model: Some(crate::openclaw_config::OpenClawDefaultModel {
-            primary: "demo/primary".to_string(),
-            fallbacks: (1..=8)
-                .map(|index| format!("demo/fallback-{index}"))
-                .collect(),
+            primary: "d/primary".to_string(),
+            fallbacks: (1..=8).map(|index| format!("d/fallback-{index}")).collect(),
             extra: std::collections::HashMap::new(),
         }),
         models: None,
@@ -4755,16 +4873,289 @@ fn openclaw_agents_route_render_keeps_add_fallback_row_visible_in_short_viewport
     form.row = form.fallbacks.len();
     app.openclaw_agents_form = Some(form);
 
-    let rendered = render_with_size(&app, &data, 72, 14);
+    let rendered = render_with_size(&app, &data, 68, 13);
     let content = content_text(&app, &rendered);
 
-    assert!(
-        content.contains(&format!(
-            "> {}",
-            buffer_cell_text(&format!("+ {}", texts::tui_openclaw_agents_add_fallback()))
-        )),
-        "{content}"
+    line_with(
+        &content,
+        &buffer_cell_text(&format!("+ {}", texts::tui_openclaw_agents_add_fallback())),
     );
+}
+
+#[test]
+fn openclaw_agents_route_render_selected_rows_do_not_use_literal_chevron_prefix() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawAgents;
+    app.focus = Focus::Content;
+
+    let mut data = minimal_data(&app.app_type);
+    data.providers.rows = vec![openclaw_provider_row(
+        "demo",
+        "Demo Provider",
+        &[
+            ("primary", "Primary"),
+            ("fallback-a", "Fallback A"),
+            ("fallback-b", "Fallback B"),
+        ],
+    )];
+    data.config.openclaw_agents_defaults = Some(crate::openclaw_config::OpenClawAgentsDefaults {
+        model: Some(crate::openclaw_config::OpenClawDefaultModel {
+            primary: "demo/primary".to_string(),
+            fallbacks: vec!["demo/fallback-a".to_string()],
+            extra: std::collections::HashMap::new(),
+        }),
+        models: None,
+        extra: std::collections::HashMap::from([
+            ("workspace".to_string(), json!("./workspace")),
+            ("timeoutSeconds".to_string(), json!(42)),
+            ("contextTokens".to_string(), json!(8192)),
+            ("maxConcurrent".to_string(), json!(2)),
+        ]),
+    });
+
+    let mut form = crate::cli::tui::app::OpenClawAgentsFormState::from_snapshot(
+        data.config.openclaw_agents_defaults.as_ref(),
+    );
+    form.section = crate::cli::tui::app::OpenClawAgentsSection::PrimaryModel;
+    form.row = 0;
+    app.openclaw_agents_form = Some(form);
+
+    let primary_rendered = render_with_size(&app, &data, 120, 40);
+    let primary_content = content_text(&app, &primary_rendered);
+    let primary_row = line_with(
+        &primary_content,
+        &buffer_cell_text("Demo Provider / Primary"),
+    );
+    assert!(!primary_row.contains('>'), "{primary_content}");
+
+    let mut form = crate::cli::tui::app::OpenClawAgentsFormState::from_snapshot(
+        data.config.openclaw_agents_defaults.as_ref(),
+    );
+    form.section = crate::cli::tui::app::OpenClawAgentsSection::FallbackModels;
+    form.row = 0;
+    app.openclaw_agents_form = Some(form);
+
+    let fallback_rendered = render_with_size(&app, &data, 120, 40);
+    let fallback_content = content_text(&app, &fallback_rendered);
+    let fallback_row = line_with(
+        &fallback_content,
+        &buffer_cell_text("Demo Provider / Fallback A"),
+    );
+    assert!(!fallback_row.contains('>'), "{fallback_content}");
+
+    let mut form = crate::cli::tui::app::OpenClawAgentsFormState::from_snapshot(
+        data.config.openclaw_agents_defaults.as_ref(),
+    );
+    form.section = crate::cli::tui::app::OpenClawAgentsSection::FallbackModels;
+    form.row = form.fallbacks.len();
+    app.openclaw_agents_form = Some(form);
+
+    let add_rendered = render_with_size(&app, &data, 120, 40);
+    let add_content = content_text(&app, &add_rendered);
+    let add_row = line_with(
+        &add_content,
+        &buffer_cell_text(&format!("+ {}", texts::tui_openclaw_agents_add_fallback())),
+    );
+    assert!(!add_row.contains('>'), "{add_content}");
+
+    let mut form = crate::cli::tui::app::OpenClawAgentsFormState::from_snapshot(
+        data.config.openclaw_agents_defaults.as_ref(),
+    );
+    form.section = crate::cli::tui::app::OpenClawAgentsSection::Runtime;
+    form.row = 0;
+    app.openclaw_agents_form = Some(form);
+
+    let runtime_rendered = render_with_size(&app, &data, 120, 40);
+    let runtime_content = content_text(&app, &runtime_rendered);
+    let runtime_row = line_with(&runtime_content, &buffer_cell_text("[./workspace]"));
+    assert!(!runtime_row.contains('>'), "{runtime_content}");
+}
+
+#[test]
+fn openclaw_agents_route_render_selected_rows_keep_surface_and_rail_emphasis() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawAgents;
+    app.focus = Focus::Content;
+
+    let mut data = minimal_data(&app.app_type);
+    data.providers.rows = vec![openclaw_provider_row(
+        "demo",
+        "Demo",
+        &[("primary", "Primary"), ("fallback-a", "Fallback A")],
+    )];
+    data.config.openclaw_agents_defaults = Some(crate::openclaw_config::OpenClawAgentsDefaults {
+        model: Some(crate::openclaw_config::OpenClawDefaultModel {
+            primary: "demo/primary".to_string(),
+            fallbacks: vec!["demo/fallback-a".to_string()],
+            extra: std::collections::HashMap::new(),
+        }),
+        models: None,
+        extra: std::collections::HashMap::from([
+            ("workspace".to_string(), json!("./workspace")),
+            ("timeoutSeconds".to_string(), json!(42)),
+            ("contextTokens".to_string(), json!(8192)),
+            ("maxConcurrent".to_string(), json!(2)),
+        ]),
+    });
+
+    let mut form = crate::cli::tui::app::OpenClawAgentsFormState::from_snapshot(
+        data.config.openclaw_agents_defaults.as_ref(),
+    );
+    form.section = crate::cli::tui::app::OpenClawAgentsSection::PrimaryModel;
+    form.row = 0;
+    app.openclaw_agents_form = Some(form);
+
+    let buf = render_with_size(&app, &data, 120, 40);
+    let content = content_text(&app, &buf);
+    let theme = theme_for(&app.app_type);
+    let selected_value = buffer_cell_text("Demo / Primary");
+    let selected_row_index = line_index(&content, &selected_value);
+    let selected_row = line_with(&content, &selected_value);
+    let selected_value_col = column_in_line(selected_row, &selected_value);
+    let selected_cell = content_cell_at(&app, &buf, selected_value_col, selected_row_index);
+
+    assert_eq!(selected_cell.bg, theme.surface);
+
+    let row_width = buf.area.width.saturating_sub(content_origin_x(&app, &buf));
+    let saw_accent_rail = (0..row_width).any(|content_x| {
+        content_cell_at(&app, &buf, content_x as usize, selected_row_index).bg == theme.accent
+    });
+    assert!(saw_accent_rail, "{content}");
+
+    let fallback_value = buffer_cell_text("Demo / Fallback A");
+    let fallback_row_index = line_index(&content, &fallback_value);
+    let fallback_row = line_with(&content, &fallback_value);
+    let fallback_value_col = column_in_line(fallback_row, &fallback_value);
+    let fallback_cell = content_cell_at(&app, &buf, fallback_value_col, fallback_row_index);
+
+    assert_ne!(fallback_cell.bg, theme.surface);
+}
+
+#[test]
+fn openclaw_agents_route_render_selected_rows_keep_reversed_emphasis_in_no_color_mode() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::set("NO_COLOR", "1");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawAgents;
+    app.focus = Focus::Content;
+
+    let mut data = minimal_data(&app.app_type);
+    data.providers.rows = vec![openclaw_provider_row(
+        "demo",
+        "Demo",
+        &[("primary", "Primary"), ("fallback-a", "Fallback A")],
+    )];
+    data.config.openclaw_agents_defaults = Some(crate::openclaw_config::OpenClawAgentsDefaults {
+        model: Some(crate::openclaw_config::OpenClawDefaultModel {
+            primary: "demo/primary".to_string(),
+            fallbacks: vec!["demo/fallback-a".to_string()],
+            extra: std::collections::HashMap::new(),
+        }),
+        models: None,
+        extra: std::collections::HashMap::from([
+            ("workspace".to_string(), json!("./workspace")),
+            ("timeoutSeconds".to_string(), json!(42)),
+            ("contextTokens".to_string(), json!(8192)),
+            ("maxConcurrent".to_string(), json!(2)),
+        ]),
+    });
+
+    let mut form = crate::cli::tui::app::OpenClawAgentsFormState::from_snapshot(
+        data.config.openclaw_agents_defaults.as_ref(),
+    );
+    form.section = crate::cli::tui::app::OpenClawAgentsSection::PrimaryModel;
+    form.row = 0;
+    app.openclaw_agents_form = Some(form);
+
+    let buf = render_with_size(&app, &data, 120, 40);
+    let content = content_text(&app, &buf);
+    let selected_value = buffer_cell_text("Demo / Primary");
+    let selected_row_index = line_index(&content, &selected_value);
+    let selected_row = line_with(&content, &selected_value);
+    let selected_value_col = column_in_line(selected_row, &selected_value);
+    let selected_cell = content_cell_at(&app, &buf, selected_value_col, selected_row_index);
+
+    assert!(selected_cell.modifier.contains(Modifier::REVERSED));
+
+    let fallback_value = buffer_cell_text("Demo / Fallback A");
+    let fallback_row_index = line_index(&content, &fallback_value);
+    let fallback_row = line_with(&content, &fallback_value);
+    let fallback_value_col = column_in_line(fallback_row, &fallback_value);
+    let fallback_cell = content_cell_at(&app, &buf, fallback_value_col, fallback_row_index);
+
+    assert!(!fallback_cell.modifier.contains(Modifier::REVERSED));
+}
+
+#[test]
+fn openclaw_agents_route_render_field_labels_use_white_foreground() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawAgents;
+    app.focus = Focus::Content;
+
+    let mut data = minimal_data(&app.app_type);
+    data.providers.rows = vec![openclaw_provider_row(
+        "demo",
+        "Demo",
+        &[("primary", "Primary"), ("fallback-a", "Fallback A")],
+    )];
+    data.config.openclaw_agents_defaults = Some(crate::openclaw_config::OpenClawAgentsDefaults {
+        model: Some(crate::openclaw_config::OpenClawDefaultModel {
+            primary: "demo/primary".to_string(),
+            fallbacks: vec!["demo/fallback-a".to_string()],
+            extra: std::collections::HashMap::new(),
+        }),
+        models: None,
+        extra: std::collections::HashMap::from([
+            ("workspace".to_string(), json!("./workspace")),
+            ("timeoutSeconds".to_string(), json!(42)),
+            ("contextTokens".to_string(), json!(8192)),
+            ("maxConcurrent".to_string(), json!(2)),
+        ]),
+    });
+
+    let mut form = crate::cli::tui::app::OpenClawAgentsFormState::from_snapshot(
+        data.config.openclaw_agents_defaults.as_ref(),
+    );
+    form.section = crate::cli::tui::app::OpenClawAgentsSection::PrimaryModel;
+    form.row = 0;
+    app.openclaw_agents_form = Some(form);
+
+    let buf = render_with_size(&app, &data, 120, 40);
+    let content = content_text(&app, &buf);
+
+    let primary_row = line_with(&content, &buffer_cell_text("Demo / Primary"));
+    let primary_row_index = line_index(&content, &buffer_cell_text("Demo / Primary"));
+    let primary_label_col = column_in_line(
+        primary_row,
+        &buffer_cell_text(texts::tui_openclaw_agents_primary_model()),
+    );
+    let primary_label_cell = content_cell_at(&app, &buf, primary_label_col, primary_row_index);
+
+    let workspace_row = line_with(&content, &buffer_cell_text("[./workspace]"));
+    let workspace_row_index = line_index(&content, &buffer_cell_text("[./workspace]"));
+    let workspace_label_col = column_in_line(
+        workspace_row,
+        &buffer_cell_text(texts::tui_openclaw_agents_workspace()),
+    );
+    let workspace_label_cell =
+        content_cell_at(&app, &buf, workspace_label_col, workspace_row_index);
+
+    assert_eq!(primary_label_cell.fg, Color::White);
+    assert_eq!(workspace_label_cell.fg, Color::White);
 }
 
 #[test]
@@ -4954,14 +5345,10 @@ fn openclaw_agents_route_render_keeps_selected_runtime_row_visible_with_wrapped_
     let rendered = render_with_size(&app, &data, 72, 16);
     let content = content_text(&app, &rendered);
 
+    let max_row = line_with(&content, &buffer_cell_text("[2]"));
     assert!(
-        content.contains(&format!(
-            "> {}",
-            buffer_cell_text(&format!(
-                "{}: [{}]",
-                texts::tui_openclaw_agents_max_concurrent(),
-                "2"
-            ))
+        max_row.contains(&buffer_cell_text(
+            texts::tui_openclaw_agents_max_concurrent()
         )),
         "{content}"
     );
@@ -4996,14 +5383,18 @@ fn openclaw_agents_route_render_keeps_off_catalog_values_visible_without_raw_jso
         extra: std::collections::HashMap::new(),
     });
 
-    let all = all_text(&render(&app, &data));
+    let rendered = render(&app, &data);
+    let all = all_text(&rendered);
+    let content = content_text(&app, &rendered);
+    let primary_row = line_with(&content, "missing/current-primary");
+    let fallback_row = line_with(&content, "missing/off-catalog");
 
     assert!(
-        all.contains(&buffer_cell_text("missing/current-primary (供应商未配置)")),
+        primary_row.contains(&buffer_cell_text("missing/current-primary (供应商未配置)")),
         "{all}"
     );
     assert!(
-        all.contains(&buffer_cell_text("missing/off-catalog (供应商未配置)")),
+        fallback_row.contains(&buffer_cell_text("missing/off-catalog (供应商未配置)")),
         "{all}"
     );
     assert!(

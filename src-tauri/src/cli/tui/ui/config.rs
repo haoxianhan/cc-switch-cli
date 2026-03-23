@@ -198,23 +198,6 @@ fn section_block_height(lines: &[String], text_width: u16) -> u16 {
         .saturating_add(2)
 }
 
-fn section_block_height_mixed(lines: &[String], wraps: &[bool], text_width: u16) -> u16 {
-    debug_assert_eq!(lines.len(), wraps.len());
-
-    lines
-        .iter()
-        .zip(wraps.iter().copied())
-        .map(|(line, wrap)| {
-            if wrap {
-                wrapped_display_line_count(line, text_width)
-            } else {
-                1
-            }
-        })
-        .sum::<u16>()
-        .saturating_add(2)
-}
-
 fn section_line_heights(lines: &[String], wraps: &[bool], text_width: u16) -> Vec<u16> {
     debug_assert_eq!(lines.len(), wraps.len());
 
@@ -381,64 +364,6 @@ fn render_section_block(
         Paragraph::new(lines.join("\n")).wrap(Wrap { trim: false }),
         inset_left(block.inner(area), 1),
     );
-}
-
-fn render_section_block_mixed(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    theme: &super::theme::Theme,
-    title: Option<&str>,
-    lines: &[String],
-    wraps: &[bool],
-    emphasized: bool,
-) {
-    if area.width < 3 || area.height < 3 {
-        return;
-    }
-
-    debug_assert_eq!(lines.len(), wraps.len());
-
-    let mut block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(Style::default().fg(if emphasized {
-            theme.accent
-        } else {
-            theme.comment
-        }));
-    if let Some(title) = title {
-        block = block.title(title);
-    }
-    frame.render_widget(block.clone(), area);
-
-    let inner = inset_left(block.inner(area), 1);
-    if inner.width == 0 || inner.height == 0 || lines.is_empty() {
-        return;
-    }
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(lines.iter().zip(wraps.iter().copied()).map(|(line, wrap)| {
-            Constraint::Length(if wrap {
-                wrapped_display_line_count(line, inner.width)
-            } else {
-                1
-            })
-        }))
-        .split(inner);
-
-    for ((line, wrap), chunk) in lines
-        .iter()
-        .zip(wraps.iter().copied())
-        .zip(chunks.into_iter())
-    {
-        let paragraph = if wrap {
-            Paragraph::new(line.clone()).wrap(Wrap { trim: false })
-        } else {
-            Paragraph::new(line.clone())
-        };
-        frame.render_widget(paragraph, *chunk);
-    }
 }
 
 fn inline_value(value: &Value) -> String {
@@ -836,6 +761,240 @@ fn render_openclaw_tools_route(
     );
 }
 
+struct OpenClawAgentsStyledRow {
+    plain_text: String,
+    line: Line<'static>,
+    wrap: bool,
+}
+
+fn openclaw_agents_plain_row_prefix(selected: bool) -> &'static str {
+    let _ = selected;
+    "  "
+}
+
+fn openclaw_agents_styled_row_prefix(
+    theme: &super::theme::Theme,
+    selected: bool,
+    row_style: Style,
+) -> Vec<Span<'static>> {
+    let rail_style = if selected {
+        if theme.no_color {
+            row_style
+        } else {
+            Style::default().bg(theme.accent)
+        }
+    } else {
+        Style::default()
+    };
+
+    vec![Span::styled(" ", rail_style), Span::styled(" ", row_style)]
+}
+
+fn openclaw_agents_selected_row_style(theme: &super::theme::Theme, selected: bool) -> Style {
+    if !selected {
+        return Style::default();
+    }
+
+    if theme.no_color {
+        Style::default().add_modifier(Modifier::REVERSED)
+    } else {
+        Style::default().bg(theme.surface)
+    }
+}
+
+fn openclaw_agents_field_row(
+    theme: &super::theme::Theme,
+    label_width: usize,
+    label: &str,
+    value: &str,
+    trailing_status: Option<&str>,
+    selected: bool,
+    wrap: bool,
+) -> OpenClawAgentsStyledRow {
+    let label_padding = " ".repeat(
+        label_width
+            .saturating_sub(UnicodeWidthStr::width(label))
+            .saturating_add(0),
+    );
+    let mut plain_text = format!(
+        "{}{label}:{label_padding} {value}",
+        openclaw_agents_plain_row_prefix(selected)
+    );
+    let trailing_status = trailing_status.filter(|status| !status.trim().is_empty());
+    if let Some(status) = trailing_status {
+        plain_text.push_str(" (");
+        plain_text.push_str(status);
+        plain_text.push(')');
+    }
+
+    let row_style = openclaw_agents_selected_row_style(theme, selected);
+    let label_style = if selected && theme.no_color {
+        row_style
+    } else {
+        row_style.fg(ratatui::style::Color::White)
+    };
+    let value_style = if selected && theme.no_color {
+        row_style
+    } else {
+        row_style.fg(theme.cyan)
+    };
+    let status_style = if selected && theme.no_color {
+        row_style
+    } else {
+        row_style.fg(theme.comment)
+    };
+    let mut spans = openclaw_agents_styled_row_prefix(theme, selected, row_style);
+    spans.extend([
+        Span::styled(label.to_string(), label_style),
+        Span::styled(":", label_style),
+        Span::styled(label_padding, row_style),
+        Span::styled(" ", row_style),
+        Span::styled(value.to_string(), value_style),
+    ]);
+    if let Some(status) = trailing_status {
+        spans.push(Span::styled(" (", row_style));
+        spans.push(Span::styled(status.to_string(), status_style));
+        spans.push(Span::styled(
+            ")",
+            row_style.fg(status_style.fg.unwrap_or(theme.comment)),
+        ));
+    }
+
+    OpenClawAgentsStyledRow {
+        plain_text,
+        line: Line::from(spans),
+        wrap,
+    }
+}
+
+fn openclaw_agents_action_row(
+    theme: &super::theme::Theme,
+    label_width: usize,
+    label: &str,
+    selected: bool,
+) -> OpenClawAgentsStyledRow {
+    let action_indent = " ".repeat(label_width.saturating_add(2));
+    let plain_text = format!(
+        "{}{action_indent}+ {label}",
+        openclaw_agents_plain_row_prefix(selected)
+    );
+    let row_style = openclaw_agents_selected_row_style(theme, selected);
+    let plus_style = if selected && theme.no_color {
+        row_style
+    } else {
+        row_style.fg(theme.accent).add_modifier(Modifier::BOLD)
+    };
+    let label_style = if selected && theme.no_color {
+        row_style
+    } else {
+        row_style.fg(theme.cyan)
+    };
+
+    OpenClawAgentsStyledRow {
+        plain_text,
+        line: Line::from({
+            let mut spans = openclaw_agents_styled_row_prefix(theme, selected, row_style);
+            spans.extend([
+                Span::styled(action_indent, row_style),
+                Span::styled("+ ", plus_style),
+                Span::styled(label.to_string(), label_style),
+            ]);
+            spans
+        }),
+        wrap: false,
+    }
+}
+
+fn openclaw_agents_disabled_row(
+    theme: &super::theme::Theme,
+    label_width: usize,
+    value: &str,
+) -> OpenClawAgentsStyledRow {
+    let value_indent = " ".repeat(label_width.saturating_add(2));
+    let plain_text = format!("  {value_indent}{value}");
+
+    OpenClawAgentsStyledRow {
+        plain_text,
+        line: Line::from(vec![
+            Span::raw("  "),
+            Span::raw(value_indent),
+            Span::styled(value.to_string(), Style::default().fg(theme.comment)),
+        ]),
+        wrap: false,
+    }
+}
+
+fn openclaw_agents_note_row(text: String, wrap: bool) -> OpenClawAgentsStyledRow {
+    OpenClawAgentsStyledRow {
+        plain_text: text.clone(),
+        line: Line::from(text),
+        wrap,
+    }
+}
+
+fn openclaw_agents_section_block_height(rows: &[OpenClawAgentsStyledRow], text_width: u16) -> u16 {
+    section_line_heights(
+        &rows
+            .iter()
+            .map(|row| row.plain_text.clone())
+            .collect::<Vec<_>>(),
+        &rows.iter().map(|row| row.wrap).collect::<Vec<_>>(),
+        text_width,
+    )
+    .into_iter()
+    .sum::<u16>()
+    .saturating_add(2)
+}
+
+fn render_openclaw_agents_section_block(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    theme: &super::theme::Theme,
+    title: Option<&str>,
+    rows: &[OpenClawAgentsStyledRow],
+) {
+    if area.width < 3 || area.height < 3 {
+        return;
+    }
+
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Plain)
+        .border_style(Style::default().fg(theme.dim));
+    if let Some(title) = title {
+        block = block.title(Line::styled(
+            title.to_string(),
+            Style::default().fg(theme.comment),
+        ));
+    }
+    frame.render_widget(block.clone(), area);
+
+    let inner = inset_left(block.inner(area), 1);
+    if inner.width == 0 || inner.height == 0 || rows.is_empty() {
+        return;
+    }
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(rows.iter().map(|row| {
+            Constraint::Length(if row.wrap {
+                wrapped_display_line_count(&row.plain_text, inner.width)
+            } else {
+                1
+            })
+        }))
+        .split(inner);
+
+    for (row, chunk) in rows.iter().zip(chunks.into_iter()) {
+        let paragraph = if row.wrap {
+            Paragraph::new(row.line.clone()).wrap(Wrap { trim: false })
+        } else {
+            Paragraph::new(row.line.clone())
+        };
+        frame.render_widget(paragraph, *chunk);
+    }
+}
+
 fn render_openclaw_agents_route(
     frame: &mut Frame<'_>,
     app: &App,
@@ -916,21 +1075,32 @@ fn render_openclaw_agents_route(
 
     let body_area = inset_left(chunks[2], CONTENT_INSET_LEFT);
     if load_failed {
-        let message_lines = vec![texts::tui_openclaw_agents_load_failed_message().to_string()];
+        let message_rows = vec![openclaw_agents_note_row(
+            texts::tui_openclaw_agents_load_failed_message().to_string(),
+            true,
+        )];
         let section_text_width = body_area.width.saturating_sub(3);
         let body = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1),
-                Constraint::Length(section_block_height(&message_lines, section_text_width)),
+                Constraint::Length(1),
+                Constraint::Length(openclaw_agents_section_block_height(
+                    &message_rows,
+                    section_text_width,
+                )),
                 Constraint::Min(0),
             ])
             .split(body_area);
         frame.render_widget(
-            Paragraph::new(texts::tui_openclaw_agents_description()).wrap(Wrap { trim: false }),
+            Paragraph::new(Line::styled(
+                texts::tui_openclaw_agents_description(),
+                Style::default().fg(theme.comment),
+            ))
+            .wrap(Wrap { trim: false }),
             body[0],
         );
-        render_section_block(frame, body[1], theme, None, &message_lines, false);
+        render_openclaw_agents_section_block(frame, body[2], theme, None, &message_rows);
         return;
     }
 
@@ -941,51 +1111,54 @@ fn render_openclaw_agents_route(
     let is_selected = |section: app::OpenClawAgentsSection, row: usize| {
         form.section == section && form.row == row
     };
-    let inline_runtime_row = |selected: bool, label: &str, value: String| {
-        let row = format!("{label}: [{value}]");
-        if selected {
-            format!("  > {row}")
-        } else {
-            format!("    {row}")
-        }
-    };
-    let action_row = |selected: bool, value: &str| {
-        if selected {
-            format!("  > + {value}")
-        } else {
-            format!("    + {value}")
-        }
-    };
-    let inline_model_row = |selected: bool, label: &str, value: String| {
-        let row = format!("{label}: {value}");
-        if selected {
-            format!("  > {row}")
-        } else {
-            format!("    {row}")
-        }
-    };
-    let disabled_row = |value: &str| format!("    {value}");
     let available_fallback_options = form.available_fallback_options(&model_options);
 
-    let mut model_lines = vec![inline_model_row(
-        is_selected(app::OpenClawAgentsSection::PrimaryModel, 0),
+    let field_label_width = [
         texts::tui_openclaw_agents_primary_model(),
-        openclaw_agents_model_label(&form.primary_model, &model_options),
+        texts::tui_openclaw_agents_fallback_models(),
+        texts::tui_openclaw_agents_workspace(),
+        texts::tui_openclaw_agents_timeout(),
+        texts::tui_openclaw_agents_context_tokens(),
+        texts::tui_openclaw_agents_max_concurrent(),
+    ]
+    .into_iter()
+    .map(UnicodeWidthStr::width)
+    .max()
+    .unwrap_or(0);
+
+    let (primary_value, primary_status) =
+        openclaw_agents_model_value_parts(&form.primary_model, &model_options);
+    let mut model_rows = vec![openclaw_agents_field_row(
+        theme,
+        field_label_width,
+        texts::tui_openclaw_agents_primary_model(),
+        &primary_value,
+        primary_status,
+        is_selected(app::OpenClawAgentsSection::PrimaryModel, 0),
+        false,
     )];
     let mut model_selected_line =
         is_selected(app::OpenClawAgentsSection::PrimaryModel, 0).then_some(0);
     for (index, value) in form.fallbacks.iter().enumerate() {
+        let (fallback_value, fallback_status) =
+            openclaw_agents_model_value_parts(value, &model_options);
         if is_selected(app::OpenClawAgentsSection::FallbackModels, index) {
-            model_selected_line = Some(model_lines.len());
+            model_selected_line = Some(model_rows.len());
         }
-        model_lines.push(inline_model_row(
-            is_selected(app::OpenClawAgentsSection::FallbackModels, index),
+        model_rows.push(openclaw_agents_field_row(
+            theme,
+            field_label_width,
             texts::tui_openclaw_agents_fallback_models(),
-            openclaw_agents_model_label(value, &model_options),
+            &fallback_value,
+            fallback_status,
+            is_selected(app::OpenClawAgentsSection::FallbackModels, index),
+            false,
         ));
     }
     if available_fallback_options.is_empty() {
-        model_lines.push(disabled_row(
+        model_rows.push(openclaw_agents_disabled_row(
+            theme,
+            field_label_width,
             texts::tui_openclaw_agents_add_fallback_disabled(),
         ));
     } else {
@@ -993,21 +1166,27 @@ fn render_openclaw_agents_route(
             app::OpenClawAgentsSection::FallbackModels,
             form.fallbacks.len(),
         ) {
-            model_selected_line = Some(model_lines.len());
+            model_selected_line = Some(model_rows.len());
         }
-        model_lines.push(action_row(
+        model_rows.push(openclaw_agents_action_row(
+            theme,
+            field_label_width,
+            texts::tui_openclaw_agents_add_fallback(),
             is_selected(
                 app::OpenClawAgentsSection::FallbackModels,
                 form.fallbacks.len(),
             ),
-            texts::tui_openclaw_agents_add_fallback(),
         ));
     }
     if !form.model_extra.is_empty() {
-        model_lines.push(String::new());
-        model_lines.push(texts::tui_openclaw_agents_preserved_fields_label().to_string());
+        model_rows.push(openclaw_agents_note_row(String::new(), false));
+        model_rows.push(openclaw_agents_note_row(
+            texts::tui_openclaw_agents_preserved_fields_label().to_string(),
+            true,
+        ));
+        let mut model_extra_lines = Vec::new();
         append_json_lines(
-            &mut model_lines,
+            &mut model_extra_lines,
             &Value::Object(
                 form.model_extra
                     .iter()
@@ -1015,37 +1194,45 @@ fn render_openclaw_agents_route(
                     .collect(),
             ),
         );
+        model_rows.extend(
+            model_extra_lines
+                .into_iter()
+                .map(|line| openclaw_agents_note_row(line, true)),
+        );
     }
 
     let section_text_width = body_area.width.saturating_sub(3);
-    let mut runtime_lines = Vec::new();
-    let mut runtime_wraps = Vec::new();
+    let mut runtime_rows = Vec::new();
     let mut runtime_selected_line = None;
-    fn push_runtime_line(lines: &mut Vec<String>, wraps: &mut Vec<bool>, line: String, wrap: bool) {
-        lines.push(line);
-        wraps.push(wrap);
+    fn push_runtime_row(rows: &mut Vec<OpenClawAgentsStyledRow>, row: OpenClawAgentsStyledRow) {
+        rows.push(row);
     }
     if form.has_legacy_timeout {
-        push_runtime_line(
-            &mut runtime_lines,
-            &mut runtime_wraps,
-            texts::tui_openclaw_agents_legacy_timeout_title().to_string(),
-            true,
-        );
-        push_runtime_line(
-            &mut runtime_lines,
-            &mut runtime_wraps,
-            format!(
-                "  {}",
-                if form.has_unmigratable_legacy_timeout() {
-                    texts::tui_openclaw_agents_legacy_timeout_invalid_description()
-                } else {
-                    texts::tui_openclaw_agents_legacy_timeout_description()
-                }
+        push_runtime_row(
+            &mut runtime_rows,
+            openclaw_agents_note_row(
+                texts::tui_openclaw_agents_legacy_timeout_title().to_string(),
+                true,
             ),
-            true,
         );
-        push_runtime_line(&mut runtime_lines, &mut runtime_wraps, String::new(), true);
+        push_runtime_row(
+            &mut runtime_rows,
+            openclaw_agents_note_row(
+                format!(
+                    "  {}",
+                    if form.has_unmigratable_legacy_timeout() {
+                        texts::tui_openclaw_agents_legacy_timeout_invalid_description()
+                    } else {
+                        texts::tui_openclaw_agents_legacy_timeout_description()
+                    }
+                ),
+                true,
+            ),
+        );
+        push_runtime_row(
+            &mut runtime_rows,
+            openclaw_agents_note_row(String::new(), false),
+        );
     }
 
     for (row, label, value) in [
@@ -1071,35 +1258,45 @@ fn render_openclaw_agents_route(
         ),
     ] {
         if is_selected(app::OpenClawAgentsSection::Runtime, row) {
-            runtime_selected_line = Some(runtime_lines.len());
+            runtime_selected_line = Some(runtime_rows.len());
         }
-        push_runtime_line(
-            &mut runtime_lines,
-            &mut runtime_wraps,
-            inline_runtime_row(
-                is_selected(app::OpenClawAgentsSection::Runtime, row),
+        push_runtime_row(
+            &mut runtime_rows,
+            openclaw_agents_field_row(
+                theme,
+                field_label_width,
                 label,
-                value,
+                &format!("[{value}]"),
+                None,
+                is_selected(app::OpenClawAgentsSection::Runtime, row),
+                false,
             ),
-            false,
         );
     }
     if form.has_preserved_non_string_runtime_values() {
-        push_runtime_line(&mut runtime_lines, &mut runtime_wraps, String::new(), true);
-        push_runtime_line(
-            &mut runtime_lines,
-            &mut runtime_wraps,
-            texts::tui_openclaw_agents_preserved_runtime_notice().to_string(),
-            true,
+        push_runtime_row(
+            &mut runtime_rows,
+            openclaw_agents_note_row(String::new(), false),
+        );
+        push_runtime_row(
+            &mut runtime_rows,
+            openclaw_agents_note_row(
+                texts::tui_openclaw_agents_preserved_runtime_notice().to_string(),
+                true,
+            ),
         );
     }
     if !form.defaults_extra.is_empty() {
-        push_runtime_line(&mut runtime_lines, &mut runtime_wraps, String::new(), true);
-        push_runtime_line(
-            &mut runtime_lines,
-            &mut runtime_wraps,
-            texts::tui_openclaw_agents_preserved_fields_label().to_string(),
-            true,
+        push_runtime_row(
+            &mut runtime_rows,
+            openclaw_agents_note_row(String::new(), false),
+        );
+        push_runtime_row(
+            &mut runtime_rows,
+            openclaw_agents_note_row(
+                texts::tui_openclaw_agents_preserved_fields_label().to_string(),
+                true,
+            ),
         );
         let mut defaults_extra_lines = Vec::new();
         append_json_lines(
@@ -1111,26 +1308,30 @@ fn render_openclaw_agents_route(
                     .collect(),
             ),
         );
-        for line in defaults_extra_lines {
-            push_runtime_line(&mut runtime_lines, &mut runtime_wraps, line, true);
-        }
+        runtime_rows.extend(
+            defaults_extra_lines
+                .into_iter()
+                .map(|line| openclaw_agents_note_row(line, true)),
+        );
     }
 
-    let model_wraps = vec![true; model_lines.len()];
-    let model_line_heights = section_line_heights(&model_lines, &model_wraps, section_text_width);
-    let model_height = model_line_heights
+    let model_plain_lines = model_rows
         .iter()
-        .copied()
-        .sum::<u16>()
-        .saturating_add(2);
+        .map(|row| row.plain_text.clone())
+        .collect::<Vec<_>>();
+    let model_wraps = model_rows.iter().map(|row| row.wrap).collect::<Vec<_>>();
+    let model_line_heights =
+        section_line_heights(&model_plain_lines, &model_wraps, section_text_width);
+    let model_height = openclaw_agents_section_block_height(&model_rows, section_text_width);
+    let runtime_plain_lines = runtime_rows
+        .iter()
+        .map(|row| row.plain_text.clone())
+        .collect::<Vec<_>>();
+    let runtime_wraps = runtime_rows.iter().map(|row| row.wrap).collect::<Vec<_>>();
     let runtime_line_heights =
-        section_line_heights(&runtime_lines, &runtime_wraps, section_text_width);
-    let runtime_height = runtime_line_heights
-        .iter()
-        .copied()
-        .sum::<u16>()
-        .saturating_add(2);
-    let remaining_height = body_area.height.saturating_sub(1);
+        section_line_heights(&runtime_plain_lines, &runtime_wraps, section_text_width);
+    let runtime_height = openclaw_agents_section_block_height(&runtime_rows, section_text_width);
+    let remaining_height = body_area.height.saturating_sub(2);
     let (model_height, runtime_height) = split_section_heights(
         remaining_height,
         model_height,
@@ -1138,15 +1339,15 @@ fn render_openclaw_agents_route(
         form.section == app::OpenClawAgentsSection::Runtime,
     );
     let model_window = section_line_window(&model_line_heights, model_height, model_selected_line);
-    let visible_model_lines = &model_lines[model_window.clone()];
+    let visible_model_rows = &model_rows[model_window.clone()];
     let runtime_window =
         section_line_window(&runtime_line_heights, runtime_height, runtime_selected_line);
-    let visible_runtime_lines = &runtime_lines[runtime_window.clone()];
-    let visible_runtime_wraps = &runtime_wraps[runtime_window];
+    let visible_runtime_rows = &runtime_rows[runtime_window];
 
     let body = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(model_height),
             Constraint::Length(runtime_height),
@@ -1155,38 +1356,47 @@ fn render_openclaw_agents_route(
         .split(body_area);
 
     frame.render_widget(
-        Paragraph::new(texts::tui_openclaw_agents_description()).wrap(Wrap { trim: false }),
+        Paragraph::new(Line::styled(
+            texts::tui_openclaw_agents_description(),
+            Style::default().fg(theme.comment),
+        ))
+        .wrap(Wrap { trim: false }),
         body[0],
     );
-    render_section_block(
-        frame,
-        body[1],
-        theme,
-        Some(texts::tui_openclaw_agents_model_section()),
-        visible_model_lines,
-        false,
-    );
-    render_section_block_mixed(
+    render_openclaw_agents_section_block(
         frame,
         body[2],
         theme,
+        Some(texts::tui_openclaw_agents_model_section()),
+        visible_model_rows,
+    );
+    render_openclaw_agents_section_block(
+        frame,
+        body[3],
+        theme,
         Some(texts::tui_openclaw_agents_runtime_section()),
-        visible_runtime_lines,
-        visible_runtime_wraps,
-        false,
+        visible_runtime_rows,
     );
 }
 
-fn openclaw_agents_model_label(value: &str, options: &[app::OpenClawModelOption]) -> String {
+fn openclaw_agents_model_value_parts(
+    value: &str,
+    options: &[app::OpenClawModelOption],
+) -> (String, Option<&'static str>) {
     if value.trim().is_empty() {
-        return texts::tui_openclaw_agents_not_set().to_string();
+        return (texts::tui_openclaw_agents_not_set().to_string(), None);
     }
 
     options
         .iter()
         .find(|option| option.value == value)
-        .map(|option| option.label.clone())
-        .unwrap_or_else(|| texts::tui_openclaw_agents_not_in_list(value))
+        .map(|option| (option.label.clone(), None))
+        .unwrap_or_else(|| {
+            (
+                value.to_string(),
+                Some(texts::tui_openclaw_agents_not_configured_suffix()),
+            )
+        })
 }
 
 fn openclaw_agents_runtime_value(value: &str, preserved: Option<&Value>) -> String {
