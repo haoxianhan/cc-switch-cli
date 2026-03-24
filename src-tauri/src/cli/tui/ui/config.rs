@@ -431,6 +431,96 @@ fn compact_two_column_lines(lines: &[String], total_width: u16) -> Option<Vec<St
     ])
 }
 
+struct OpenClawEnvStyledRow {
+    plain_text: String,
+    line: Line<'static>,
+}
+
+fn openclaw_env_protected_value_style(theme: &super::theme::Theme) -> Style {
+    if theme.no_color {
+        Style::default().add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.warn).add_modifier(Modifier::BOLD)
+    }
+}
+
+fn openclaw_env_row(
+    theme: &super::theme::Theme,
+    label_width: usize,
+    key: &str,
+    value: &str,
+) -> OpenClawEnvStyledRow {
+    let padded_key = pad_display_width(key, label_width);
+    let plain_text = format!("  {padded_key}  {value}");
+    let value_span = if value == redacted_secret_placeholder() {
+        Span::styled(value.to_string(), openclaw_env_protected_value_style(theme))
+    } else {
+        Span::raw(value.to_string())
+    };
+
+    OpenClawEnvStyledRow {
+        plain_text,
+        line: Line::from(vec![
+            Span::raw("  "),
+            Span::raw(padded_key),
+            Span::raw("  "),
+            value_span,
+        ]),
+    }
+}
+
+fn openclaw_env_empty_row(theme: &super::theme::Theme) -> OpenClawEnvStyledRow {
+    let text = format!("  {}", texts::tui_openclaw_config_env_empty());
+
+    OpenClawEnvStyledRow {
+        plain_text: text.clone(),
+        line: Line::styled(text, Style::default().fg(theme.comment)),
+    }
+}
+
+fn openclaw_env_section_block_height(rows: &[OpenClawEnvStyledRow], text_width: u16) -> u16 {
+    rows.iter()
+        .map(|row| wrapped_display_line_count(&row.plain_text, text_width))
+        .sum::<u16>()
+        .saturating_add(2)
+}
+
+fn render_openclaw_env_section_block(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    theme: &super::theme::Theme,
+    rows: &[OpenClawEnvStyledRow],
+) {
+    if area.width < 3 || area.height < 3 {
+        return;
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Plain)
+        .border_style(Style::default().fg(theme.comment));
+    frame.render_widget(block.clone(), area);
+
+    let inner = inset_left(block.inner(area), 1);
+    if inner.width == 0 || inner.height == 0 || rows.is_empty() {
+        return;
+    }
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(rows.iter().map(|row| {
+            Constraint::Length(wrapped_display_line_count(&row.plain_text, inner.width))
+        }))
+        .split(inner);
+
+    for (row, chunk) in rows.iter().zip(chunks.into_iter()) {
+        frame.render_widget(
+            Paragraph::new(row.line.clone()).wrap(Wrap { trim: false }),
+            *chunk,
+        );
+    }
+}
+
 fn append_json_lines(lines: &mut Vec<String>, value: &Value) {
     let pretty = serde_json::to_string_pretty(&redact_sensitive_json(value))
         .unwrap_or_else(|_| "{}".to_string());
@@ -479,6 +569,7 @@ fn render_openclaw_env_route(
         .constraints([
             Constraint::Length(1),
             Constraint::Length(warning_height),
+            Constraint::Length(if has_warnings { 1 } else { 0 }),
             Constraint::Min(0),
         ])
         .split(inner);
@@ -500,35 +591,275 @@ fn render_openclaw_env_route(
         render_warning_banner(frame, chunks[1], theme, &section_warnings);
     }
 
-    let mut env_rows = section
+    let mut env_entries = section
         .map(|section| {
             section
                 .vars
                 .iter()
-                .map(|(key, value)| format!("  {key}: {}", inline_env_value(key, value)))
+                .map(|(key, value)| (key.clone(), inline_env_value(key, value)))
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    env_rows.sort_by_key(|line| line.to_ascii_lowercase());
-    if env_rows.is_empty() {
-        env_rows.push(format!("  {}", texts::none()));
-    }
-    let body_area = inset_left(chunks[2], CONTENT_INSET_LEFT);
+    env_entries.sort_by_key(|(key, _)| key.to_ascii_lowercase());
+    let label_width = env_entries
+        .iter()
+        .map(|(key, _)| UnicodeWidthStr::width(key.as_str()))
+        .max()
+        .unwrap_or(0);
+    let env_rows = if env_entries.is_empty() {
+        vec![openclaw_env_empty_row(theme)]
+    } else {
+        env_entries
+            .into_iter()
+            .map(|(key, value)| openclaw_env_row(theme, label_width, &key, &value))
+            .collect::<Vec<_>>()
+    };
+    let body_area = inset_left(chunks[3], CONTENT_INSET_LEFT);
     let section_text_width = body_area.width.saturating_sub(3);
     let body = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
-            Constraint::Length(section_block_height(&env_rows, section_text_width)),
+            Constraint::Length(1),
+            Constraint::Length(openclaw_env_section_block_height(
+                &env_rows,
+                section_text_width,
+            )),
             Constraint::Min(0),
         ])
         .split(body_area);
 
     frame.render_widget(
-        Paragraph::new(texts::tui_openclaw_config_env_description()).wrap(Wrap { trim: false }),
+        Paragraph::new(Line::styled(
+            texts::tui_openclaw_config_env_description(),
+            Style::default().fg(theme.comment),
+        ))
+        .wrap(Wrap { trim: false }),
         body[0],
     );
-    render_section_block(frame, body[1], theme, None, &env_rows, false);
+    render_openclaw_env_section_block(frame, body[2], theme, &env_rows);
+}
+
+struct OpenClawToolsStyledRow {
+    plain_text: String,
+    line: Line<'static>,
+    wrap: bool,
+}
+
+fn openclaw_tools_selected_row_style(theme: &super::theme::Theme, selected: bool) -> Style {
+    if selected {
+        selection_style(theme)
+    } else {
+        Style::default()
+    }
+}
+
+fn openclaw_tools_profile_row(
+    theme: &super::theme::Theme,
+    label: &str,
+    value: &str,
+    selected: bool,
+) -> OpenClawToolsStyledRow {
+    let plain_text = format!("{label}: {value}");
+    let row_style = openclaw_tools_selected_row_style(theme, selected);
+    let line = if selected {
+        Line::styled(plain_text.clone(), row_style)
+    } else {
+        Line::from(vec![
+            Span::styled(
+                format!("{label}:"),
+                Style::default()
+                    .fg(theme.comment)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::raw(value.to_string()),
+        ])
+    };
+
+    OpenClawToolsStyledRow {
+        plain_text,
+        line,
+        wrap: true,
+    }
+}
+
+fn openclaw_tools_section_label_row(
+    theme: &super::theme::Theme,
+    label: &str,
+) -> OpenClawToolsStyledRow {
+    OpenClawToolsStyledRow {
+        plain_text: label.to_string(),
+        line: Line::styled(
+            label.to_string(),
+            Style::default()
+                .fg(theme.comment)
+                .add_modifier(Modifier::BOLD),
+        ),
+        wrap: false,
+    }
+}
+
+fn openclaw_tools_rule_row(
+    theme: &super::theme::Theme,
+    value: &str,
+    selected: bool,
+) -> OpenClawToolsStyledRow {
+    let plain_text = value.to_string();
+    let row_style = openclaw_tools_selected_row_style(theme, selected);
+
+    OpenClawToolsStyledRow {
+        plain_text: plain_text.clone(),
+        line: if selected {
+            Line::styled(plain_text, row_style)
+        } else {
+            Line::from(plain_text)
+        },
+        wrap: true,
+    }
+}
+
+fn openclaw_tools_add_row(
+    theme: &super::theme::Theme,
+    label: &str,
+    selected: bool,
+) -> OpenClawToolsStyledRow {
+    let plain_text = label.to_string();
+    let row_style = openclaw_tools_selected_row_style(theme, selected);
+    let plus_style = if selected {
+        row_style
+    } else if theme.no_color {
+        Style::default().add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(theme.accent)
+            .add_modifier(Modifier::BOLD)
+    };
+    let label_style = if selected {
+        row_style
+    } else if theme.no_color {
+        Style::default()
+    } else {
+        Style::default().fg(theme.cyan)
+    };
+    let (prefix, suffix) = label
+        .strip_prefix("+ ")
+        .map_or(("", label), |rest| ("+ ", rest));
+
+    OpenClawToolsStyledRow {
+        plain_text,
+        line: if prefix.is_empty() {
+            Line::styled(label.to_string(), label_style)
+        } else {
+            Line::from(vec![
+                Span::styled(prefix.to_string(), plus_style),
+                Span::styled(suffix.to_string(), label_style),
+            ])
+        },
+        wrap: true,
+    }
+}
+
+fn openclaw_tools_separator_row(theme: &super::theme::Theme) -> OpenClawToolsStyledRow {
+    openclaw_tools_note_row("- ".repeat(128), Style::default().fg(theme.dim), false)
+}
+
+fn openclaw_tools_note_row(text: String, style: Style, wrap: bool) -> OpenClawToolsStyledRow {
+    OpenClawToolsStyledRow {
+        plain_text: text.clone(),
+        line: Line::styled(text, style),
+        wrap,
+    }
+}
+
+fn openclaw_tools_section_block_height(rows: &[OpenClawToolsStyledRow], text_width: u16) -> u16 {
+    section_line_heights(
+        &rows
+            .iter()
+            .map(|row| row.plain_text.clone())
+            .collect::<Vec<_>>(),
+        &rows.iter().map(|row| row.wrap).collect::<Vec<_>>(),
+        text_width,
+    )
+    .into_iter()
+    .sum::<u16>()
+    .saturating_add(2)
+}
+
+fn openclaw_tools_section_border_style(theme: &super::theme::Theme, primary: bool) -> Style {
+    if primary {
+        if theme.no_color {
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.dim).add_modifier(Modifier::BOLD)
+        }
+    } else {
+        Style::default().fg(theme.dim)
+    }
+}
+
+fn openclaw_tools_section_title_style(theme: &super::theme::Theme, primary: bool) -> Style {
+    if primary {
+        if theme.no_color {
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+                .fg(theme.comment)
+                .add_modifier(Modifier::BOLD)
+        }
+    } else {
+        Style::default().fg(theme.comment)
+    }
+}
+
+fn render_openclaw_tools_section_block(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    theme: &super::theme::Theme,
+    title: Option<&str>,
+    rows: &[OpenClawToolsStyledRow],
+    primary: bool,
+) {
+    if area.width < 3 || area.height < 3 {
+        return;
+    }
+
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Plain)
+        .border_style(openclaw_tools_section_border_style(theme, primary));
+    if let Some(title) = title {
+        block = block.title(Line::styled(
+            title.to_string(),
+            openclaw_tools_section_title_style(theme, primary),
+        ));
+    }
+    frame.render_widget(block.clone(), area);
+
+    let inner = inset_left(block.inner(area), 1);
+    if inner.width == 0 || inner.height == 0 || rows.is_empty() {
+        return;
+    }
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(rows.iter().map(|row| {
+            Constraint::Length(if row.wrap {
+                wrapped_display_line_count(&row.plain_text, inner.width)
+            } else {
+                1
+            })
+        }))
+        .split(inner);
+
+    for (row, chunk) in rows.iter().zip(chunks.into_iter()) {
+        let paragraph = if row.wrap {
+            Paragraph::new(row.line.clone()).wrap(Wrap { trim: false })
+        } else {
+            Paragraph::new(row.line.clone())
+        };
+        frame.render_widget(paragraph, *chunk);
+    }
 }
 
 fn render_openclaw_tools_route(
@@ -620,7 +951,11 @@ fn render_openclaw_tools_route(
             ])
             .split(body_area);
         frame.render_widget(
-            Paragraph::new(texts::tui_openclaw_tools_description()).wrap(Wrap { trim: false }),
+            Paragraph::new(Line::styled(
+                texts::tui_openclaw_tools_description(),
+                Style::default().fg(theme.comment),
+            ))
+            .wrap(Wrap { trim: false }),
             body[0],
         );
         render_section_block(frame, body[1], theme, None, &message_lines, false);
@@ -633,72 +968,80 @@ fn render_openclaw_tools_route(
 
     let is_selected =
         |section: app::OpenClawToolsSection, row: usize| form.section == section && form.row == row;
-    let nested_row = |selected: bool, value: String| {
-        if selected {
-            format!("  > {value}")
-        } else {
-            format!("    {value}")
-        }
-    };
 
-    let mut profile_lines = vec![nested_row(
+    let mut profile_rows = vec![openclaw_tools_profile_row(
+        theme,
+        texts::tui_openclaw_tools_profile_label(),
+        &form.current_profile_label(),
         is_selected(app::OpenClawToolsSection::Profile, 0),
-        format!(
-            "{}: {}",
-            texts::tui_openclaw_tools_profile_label(),
-            form.current_profile_label()
-        ),
     )];
     if let Some(value) = form.unsupported_profile() {
-        profile_lines.push(String::new());
-        profile_lines.push(texts::tui_openclaw_tools_unsupported_profile_title().to_string());
-        profile_lines.push(format!(
-            "    {}",
-            texts::tui_openclaw_tools_unsupported_profile_description(value)
+        profile_rows.push(openclaw_tools_note_row(
+            texts::tui_openclaw_tools_unsupported_profile_title().to_string(),
+            Style::default().fg(theme.comment),
+            true,
+        ));
+        profile_rows.push(openclaw_tools_note_row(
+            texts::tui_openclaw_tools_unsupported_profile_description(value),
+            Style::default().fg(theme.dim),
+            true,
         ));
     }
 
-    let mut rules_lines = vec![texts::tui_openclaw_tools_allow_list_label().to_string()];
+    let mut rules_rows = vec![openclaw_tools_section_label_row(
+        theme,
+        texts::tui_openclaw_tools_allow_list_label(),
+    )];
     let mut rules_selected_line = None;
     for (index, value) in form.allow.iter().enumerate() {
         if is_selected(app::OpenClawToolsSection::Allow, index) {
-            rules_selected_line = Some(rules_lines.len());
+            rules_selected_line = Some(rules_rows.len());
         }
-        rules_lines.push(nested_row(
+        rules_rows.push(openclaw_tools_rule_row(
+            theme,
+            value,
             is_selected(app::OpenClawToolsSection::Allow, index),
-            value.clone(),
         ));
     }
     if is_selected(app::OpenClawToolsSection::Allow, form.allow.len()) {
-        rules_selected_line = Some(rules_lines.len());
+        rules_selected_line = Some(rules_rows.len());
     }
-    rules_lines.push(nested_row(
+    rules_rows.push(openclaw_tools_add_row(
+        theme,
+        texts::tui_openclaw_tools_add_allow_rule(),
         is_selected(app::OpenClawToolsSection::Allow, form.allow.len()),
-        texts::tui_openclaw_tools_add_allow_rule().to_string(),
     ));
-    rules_lines.push(String::new());
-    rules_lines.push(texts::tui_openclaw_tools_deny_list_label().to_string());
+    rules_rows.push(openclaw_tools_separator_row(theme));
+    rules_rows.push(openclaw_tools_section_label_row(
+        theme,
+        texts::tui_openclaw_tools_deny_list_label(),
+    ));
     for (index, value) in form.deny.iter().enumerate() {
         if is_selected(app::OpenClawToolsSection::Deny, index) {
-            rules_selected_line = Some(rules_lines.len());
+            rules_selected_line = Some(rules_rows.len());
         }
-        rules_lines.push(nested_row(
+        rules_rows.push(openclaw_tools_rule_row(
+            theme,
+            value,
             is_selected(app::OpenClawToolsSection::Deny, index),
-            value.clone(),
         ));
     }
     if is_selected(app::OpenClawToolsSection::Deny, form.deny.len()) {
-        rules_selected_line = Some(rules_lines.len());
+        rules_selected_line = Some(rules_rows.len());
     }
-    rules_lines.push(nested_row(
+    rules_rows.push(openclaw_tools_add_row(
+        theme,
+        texts::tui_openclaw_tools_add_deny_rule(),
         is_selected(app::OpenClawToolsSection::Deny, form.deny.len()),
-        texts::tui_openclaw_tools_add_deny_rule().to_string(),
     ));
     if !form.extra.is_empty() {
-        rules_lines.push(String::new());
-        rules_lines.push(texts::tui_openclaw_tools_extra_fields_label().to_string());
+        rules_rows.push(openclaw_tools_section_label_row(
+            theme,
+            texts::tui_openclaw_tools_extra_fields_label(),
+        ));
+        let mut extra_lines = Vec::new();
         append_json_lines(
-            &mut rules_lines,
+            &mut extra_lines,
             &Value::Object(
                 form.extra
                     .iter()
@@ -706,18 +1049,31 @@ fn render_openclaw_tools_route(
                     .collect(),
             ),
         );
+        rules_rows.extend(
+            extra_lines.into_iter().map(|line| {
+                openclaw_tools_note_row(line, Style::default().fg(theme.comment), true)
+            }),
+        );
     }
 
     let section_text_width = body_area.width.saturating_sub(3);
-    let profile_height = section_block_height(&profile_lines, section_text_width);
-    let rules_wraps = vec![true; rules_lines.len()];
-    let rules_line_heights = section_line_heights(&rules_lines, &rules_wraps, section_text_width);
-    let rules_height = rules_line_heights
+    let profile_plain_lines = profile_rows
         .iter()
-        .copied()
-        .sum::<u16>()
-        .saturating_add(2);
-    let remaining_height = body_area.height.saturating_sub(1);
+        .map(|row| row.plain_text.clone())
+        .collect::<Vec<_>>();
+    let profile_wraps = profile_rows.iter().map(|row| row.wrap).collect::<Vec<_>>();
+    let profile_line_heights =
+        section_line_heights(&profile_plain_lines, &profile_wraps, section_text_width);
+    let profile_height = openclaw_tools_section_block_height(&profile_rows, section_text_width);
+    let rules_plain_lines = rules_rows
+        .iter()
+        .map(|row| row.plain_text.clone())
+        .collect::<Vec<_>>();
+    let rules_wraps = rules_rows.iter().map(|row| row.wrap).collect::<Vec<_>>();
+    let rules_line_heights =
+        section_line_heights(&rules_plain_lines, &rules_wraps, section_text_width);
+    let rules_height = openclaw_tools_section_block_height(&rules_rows, section_text_width);
+    let remaining_height = body_area.height.saturating_sub(2);
     let (profile_height, rules_height) = split_section_heights(
         remaining_height,
         profile_height,
@@ -727,11 +1083,18 @@ fn render_openclaw_tools_route(
             app::OpenClawToolsSection::Allow | app::OpenClawToolsSection::Deny
         ),
     );
+    let profile_window = section_line_window(
+        &profile_line_heights,
+        profile_height,
+        is_selected(app::OpenClawToolsSection::Profile, 0).then_some(0),
+    );
+    let visible_profile_rows = &profile_rows[profile_window];
     let rules_window = section_line_window(&rules_line_heights, rules_height, rules_selected_line);
-    let visible_rules_lines = &rules_lines[rules_window.clone()];
+    let visible_rules_rows = &rules_rows[rules_window];
     let body = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(profile_height),
             Constraint::Length(rules_height),
@@ -740,24 +1103,28 @@ fn render_openclaw_tools_route(
         .split(body_area);
 
     frame.render_widget(
-        Paragraph::new(texts::tui_openclaw_tools_description()).wrap(Wrap { trim: false }),
+        Paragraph::new(Line::styled(
+            texts::tui_openclaw_tools_description(),
+            Style::default().fg(theme.comment),
+        ))
+        .wrap(Wrap { trim: false }),
         body[0],
     );
-    render_section_block(
-        frame,
-        body[1],
-        theme,
-        Some(texts::tui_openclaw_tools_profile_block_title()),
-        &profile_lines,
-        false,
-    );
-    render_section_block(
+    render_openclaw_tools_section_block(
         frame,
         body[2],
         theme,
-        Some(texts::tui_openclaw_tools_rules_block_title()),
-        visible_rules_lines,
+        Some(texts::tui_openclaw_tools_profile_block_title()),
+        visible_profile_rows,
         false,
+    );
+    render_openclaw_tools_section_block(
+        frame,
+        body[3],
+        theme,
+        Some(texts::tui_openclaw_tools_rules_block_title()),
+        visible_rules_rows,
+        true,
     );
 }
 
@@ -1442,6 +1809,320 @@ pub(super) fn render_openclaw_workspace_routes(
     }
 }
 
+struct OpenClawWorkspaceStyledRow {
+    plain_text: String,
+    line: Line<'static>,
+    wraps: bool,
+}
+
+fn openclaw_workspace_row_height(row: &OpenClawWorkspaceStyledRow, text_width: u16) -> u16 {
+    if row.wraps {
+        wrapped_display_line_count(&row.plain_text, text_width)
+    } else {
+        1
+    }
+}
+
+fn openclaw_workspace_summary_height(rows: &[OpenClawWorkspaceStyledRow], text_width: u16) -> u16 {
+    rows.iter()
+        .map(|row| openclaw_workspace_row_height(row, text_width))
+        .sum()
+}
+
+fn openclaw_workspace_section_block_height(
+    rows: &[OpenClawWorkspaceStyledRow],
+    text_width: u16,
+) -> u16 {
+    openclaw_workspace_summary_height(rows, text_width).saturating_add(2)
+}
+
+fn openclaw_workspace_section_border_style(theme: &super::theme::Theme, primary: bool) -> Style {
+    let mut style = Style::default().fg(if primary { theme.comment } else { theme.dim });
+    if primary {
+        style = style.add_modifier(Modifier::BOLD);
+    }
+    style
+}
+
+fn openclaw_workspace_meta_row(
+    theme: &super::theme::Theme,
+    label: &str,
+    value: String,
+    selected: bool,
+    subdued: bool,
+) -> OpenClawWorkspaceStyledRow {
+    let plain_text = format!("  {label}: {value}");
+    let line = if selected {
+        Line::styled(plain_text.clone(), selection_style(theme))
+    } else {
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                format!("{label}:"),
+                Style::default()
+                    .fg(theme.comment)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled(
+                value,
+                if subdued {
+                    Style::default().fg(theme.comment)
+                } else {
+                    Style::default()
+                },
+            ),
+        ])
+    };
+
+    OpenClawWorkspaceStyledRow {
+        plain_text,
+        line,
+        wraps: true,
+    }
+}
+
+fn openclaw_workspace_file_row(
+    theme: &super::theme::Theme,
+    filename_width: usize,
+    filename: &str,
+    exists: bool,
+    selected: bool,
+) -> OpenClawWorkspaceStyledRow {
+    let status = if exists {
+        texts::tui_openclaw_workspace_status_exists()
+    } else {
+        texts::tui_openclaw_workspace_status_missing()
+    };
+    let padded_filename = pad_display_width(filename, filename_width);
+    let plain_text = format!("  {padded_filename}  {status}");
+    let line = if selected {
+        Line::styled(plain_text.clone(), selection_style(theme))
+    } else {
+        let status_style = if exists {
+            Style::default().fg(theme.ok).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.comment)
+        };
+
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                padded_filename,
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled(status.to_string(), status_style),
+        ])
+    };
+
+    OpenClawWorkspaceStyledRow {
+        plain_text,
+        line,
+        wraps: false,
+    }
+}
+
+fn openclaw_workspace_note_row(
+    theme: &super::theme::Theme,
+    note: String,
+) -> OpenClawWorkspaceStyledRow {
+    let plain_text = format!("  {note}");
+
+    OpenClawWorkspaceStyledRow {
+        plain_text: plain_text.clone(),
+        line: Line::styled(plain_text, Style::default().fg(theme.comment)),
+        wraps: true,
+    }
+}
+
+fn openclaw_workspace_visible_row_window(
+    row_count: usize,
+    selected_row: Option<usize>,
+    available_height: u16,
+) -> std::ops::Range<usize> {
+    if row_count == 0 || available_height < 3 {
+        return 0..0;
+    }
+
+    let visible_rows = available_height.saturating_sub(2) as usize;
+    if row_count <= visible_rows {
+        return 0..row_count;
+    }
+
+    let selected_row = selected_row.filter(|index| *index < row_count).unwrap_or(0);
+    let end = (selected_row + 1).max(visible_rows).min(row_count);
+    let start = end.saturating_sub(visible_rows);
+    start..end
+}
+
+fn openclaw_workspace_body_heights(
+    available_height: u16,
+    summary_full_height: u16,
+    files_full_height: u16,
+    daily_full_height: u16,
+    prioritize_daily: bool,
+) -> (u16, u16, u16) {
+    const MIN_SECTION_HEIGHT: u16 = 3;
+
+    if available_height == 0 {
+        return (0, 0, 0);
+    }
+
+    let prioritized_min = if prioritize_daily {
+        daily_full_height.min(MIN_SECTION_HEIGHT)
+    } else {
+        files_full_height.min(MIN_SECTION_HEIGHT)
+    };
+    let summary_height = summary_full_height.min(available_height.saturating_sub(prioritized_min));
+    let remaining = available_height.saturating_sub(summary_height);
+    if remaining == 0 {
+        return (summary_height, 0, 0);
+    }
+
+    if remaining >= files_full_height.saturating_add(daily_full_height) {
+        return (summary_height, files_full_height, daily_full_height);
+    }
+
+    let files_min = files_full_height.min(MIN_SECTION_HEIGHT);
+    let daily_min = daily_full_height.min(MIN_SECTION_HEIGHT);
+
+    if remaining < files_min.saturating_add(daily_min) {
+        if prioritize_daily {
+            return (summary_height, 0, remaining);
+        }
+
+        return (summary_height, remaining, 0);
+    }
+
+    let mut files_height = files_min;
+    let mut daily_height = daily_min;
+    let mut extra = remaining.saturating_sub(files_height.saturating_add(daily_height));
+    let mut files_need = files_full_height.saturating_sub(files_height);
+    let mut daily_need = daily_full_height.saturating_sub(daily_height);
+
+    while extra > 0 && (files_need > 0 || daily_need > 0) {
+        openclaw_workspace_allocate_extra_line(
+            prioritize_daily,
+            &mut extra,
+            &mut files_height,
+            &mut files_need,
+            &mut daily_height,
+            &mut daily_need,
+        );
+        openclaw_workspace_allocate_extra_line(
+            !prioritize_daily,
+            &mut extra,
+            &mut files_height,
+            &mut files_need,
+            &mut daily_height,
+            &mut daily_need,
+        );
+    }
+
+    (summary_height, files_height, daily_height)
+}
+
+fn openclaw_workspace_allocate_extra_line(
+    prefer_daily: bool,
+    extra: &mut u16,
+    files_height: &mut u16,
+    files_need: &mut u16,
+    daily_height: &mut u16,
+    daily_need: &mut u16,
+) {
+    let (height, need) = if prefer_daily {
+        (daily_height, daily_need)
+    } else {
+        (files_height, files_need)
+    };
+
+    if *extra == 0 || *need == 0 {
+        return;
+    }
+
+    *height = height.saturating_add(1);
+    *need = need.saturating_sub(1);
+    *extra = extra.saturating_sub(1);
+}
+
+fn render_openclaw_workspace_section_block(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    theme: &super::theme::Theme,
+    title: Option<&str>,
+    primary: bool,
+    rows: &[OpenClawWorkspaceStyledRow],
+) {
+    if area.width < 3 || area.height < 3 {
+        return;
+    }
+
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Plain)
+        .border_style(openclaw_workspace_section_border_style(theme, primary));
+    if let Some(title) = title {
+        block = block.title(title);
+    }
+    frame.render_widget(block.clone(), area);
+
+    let inner = inset_left(block.inner(area), 1);
+    if inner.width == 0 || inner.height == 0 || rows.is_empty() {
+        return;
+    }
+
+    let mut y = inner.y;
+    let limit = inner.y.saturating_add(inner.height);
+    for row in rows {
+        if y >= limit {
+            break;
+        }
+
+        let row_height = openclaw_workspace_row_height(row, inner.width);
+        let available_height = limit.saturating_sub(y);
+        let render_height = row_height.min(available_height);
+        let row_area = Rect::new(inner.x, y, inner.width, render_height);
+        let paragraph = if row.wraps {
+            Paragraph::new(row.line.clone()).wrap(Wrap { trim: false })
+        } else {
+            Paragraph::new(row.line.clone())
+        };
+        frame.render_widget(paragraph, row_area);
+        y = y.saturating_add(render_height);
+    }
+}
+
+fn render_openclaw_workspace_summary(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    rows: &[OpenClawWorkspaceStyledRow],
+) {
+    if area.width == 0 || area.height == 0 || rows.is_empty() {
+        return;
+    }
+
+    let mut y = area.y;
+    let limit = area.y.saturating_add(area.height);
+    for row in rows {
+        if y >= limit {
+            break;
+        }
+
+        let row_height = openclaw_workspace_row_height(row, area.width);
+        let available_height = limit.saturating_sub(y);
+        let render_height = row_height.min(available_height);
+        let row_area = Rect::new(area.x, y, area.width, render_height);
+        let paragraph = if row.wraps {
+            Paragraph::new(row.line.clone()).wrap(Wrap { trim: false })
+        } else {
+            Paragraph::new(row.line.clone())
+        };
+        frame.render_widget(paragraph, row_area);
+        y = y.saturating_add(render_height);
+    }
+}
+
 fn render_openclaw_workspace(
     frame: &mut Frame<'_>,
     app: &App,
@@ -1473,101 +2154,118 @@ fn render_openclaw_workspace(
         );
     }
 
-    let selected_workspace = |index: usize| {
-        if app.workspace_idx == index {
-            "> "
-        } else {
-            "  "
-        }
-    };
-    let selected_daily_memory =
-        if app.workspace_idx == crate::commands::workspace::ALLOWED_FILES.len() {
-            "> "
-        } else {
-            "  "
-        };
-
-    let mut workspace_lines = vec![format!(
-        "  {}: {}",
-        texts::tui_openclaw_workspace_directory_label(),
-        data.config.openclaw_workspace.directory_path.display()
-    )];
-    workspace_lines.push(String::new());
     let max_filename_len = crate::commands::workspace::ALLOWED_FILES
         .iter()
         .map(|f| f.len())
         .max()
         .unwrap_or(0);
-    for (index, filename) in crate::commands::workspace::ALLOWED_FILES.iter().enumerate() {
-        let exists = data
-            .config
+    let workspace_summary_rows = vec![openclaw_workspace_meta_row(
+        theme,
+        texts::tui_openclaw_workspace_directory_label(),
+        data.config
             .openclaw_workspace
-            .file_exists
-            .get(*filename)
-            .copied()
-            .unwrap_or(false);
-        workspace_lines.push(format!(
-            "{}{:<width$}  {}",
-            selected_workspace(index),
-            filename,
-            if exists {
-                texts::tui_openclaw_workspace_status_exists()
-            } else {
-                texts::tui_openclaw_workspace_status_missing()
-            },
-            width = max_filename_len,
-        ));
-    }
+            .directory_path
+            .display()
+            .to_string(),
+        false,
+        false,
+    )];
+    let workspace_file_rows = crate::commands::workspace::ALLOWED_FILES
+        .iter()
+        .enumerate()
+        .map(|(index, filename)| {
+            let exists = data
+                .config
+                .openclaw_workspace
+                .file_exists
+                .get(*filename)
+                .copied()
+                .unwrap_or(false);
+            openclaw_workspace_file_row(
+                theme,
+                max_filename_len,
+                filename,
+                exists,
+                app.workspace_idx == index,
+            )
+        })
+        .collect::<Vec<_>>();
 
-    let mut daily_memory_lines = vec![format!(
-        "{}{}: {}",
-        selected_daily_memory,
+    let mut daily_memory_rows = vec![openclaw_workspace_meta_row(
+        theme,
         texts::tui_openclaw_workspace_daily_memory_label(),
         texts::tui_openclaw_workspace_daily_memory_count(
             data.config.openclaw_workspace.daily_memory_files.len(),
-        )
+        ),
+        app.workspace_idx == crate::commands::workspace::ALLOWED_FILES.len(),
+        false,
     )];
-    daily_memory_lines.push(format!(
-        "  {}: {}",
+    daily_memory_rows.push(openclaw_workspace_meta_row(
+        theme,
         texts::tui_openclaw_daily_memory_directory_label(),
         data.config
             .openclaw_workspace
             .directory_path
             .join("memory")
             .display()
+            .to_string(),
+        false,
+        true,
     ));
     if let Some(latest) = data.config.openclaw_workspace.daily_memory_files.first() {
-        daily_memory_lines.push(format!("  {}  {}", latest.filename, latest.preview));
+        daily_memory_rows.push(openclaw_workspace_note_row(
+            theme,
+            format!("{}  {}", latest.filename, latest.preview),
+        ));
     }
+
     let body_area = inset_left(chunks[1], CONTENT_INSET_LEFT);
+    let summary_text_width = body_area.width;
     let section_text_width = body_area.width.saturating_sub(3);
+    let summary_full_height =
+        openclaw_workspace_summary_height(&workspace_summary_rows, summary_text_width);
+    let files_full_height =
+        openclaw_workspace_section_block_height(&workspace_file_rows, section_text_width);
+    let daily_full_height =
+        openclaw_workspace_section_block_height(&daily_memory_rows, section_text_width);
+    let (summary_height, files_height, daily_height) = openclaw_workspace_body_heights(
+        body_area.height,
+        summary_full_height,
+        files_full_height,
+        daily_full_height,
+        app.workspace_idx == crate::commands::workspace::ALLOWED_FILES.len(),
+    );
+    let visible_file_window = openclaw_workspace_visible_row_window(
+        workspace_file_rows.len(),
+        (app.workspace_idx < workspace_file_rows.len()).then_some(app.workspace_idx),
+        files_height,
+    );
     let body = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(section_block_height(&workspace_lines, section_text_width)),
-            Constraint::Length(section_block_height(
-                &daily_memory_lines,
-                section_text_width,
-            )),
+            Constraint::Length(summary_height),
+            Constraint::Length(files_height),
+            Constraint::Length(daily_height),
             Constraint::Min(0),
         ])
         .split(body_area);
 
-    render_section_block(
-        frame,
-        body[0],
-        theme,
-        Some(texts::tui_openclaw_workspace_files_block_title()),
-        &workspace_lines,
-        false,
-    );
-    render_section_block(
+    render_openclaw_workspace_summary(frame, body[0], &workspace_summary_rows);
+    render_openclaw_workspace_section_block(
         frame,
         body[1],
         theme,
+        Some(texts::tui_openclaw_workspace_files_block_title()),
+        true,
+        &workspace_file_rows[visible_file_window],
+    );
+    render_openclaw_workspace_section_block(
+        frame,
+        body[2],
+        theme,
         Some(texts::tui_openclaw_workspace_daily_memory_label()),
-        &daily_memory_lines,
         false,
+        &daily_memory_rows,
     );
 }
 

@@ -426,6 +426,10 @@ fn content_cell_at<'a>(
     )]
 }
 
+fn cell_style_signature(cell: &ratatui::buffer::Cell) -> (Color, Color, Modifier) {
+    (cell.fg, cell.bg, cell.modifier)
+}
+
 fn block_title_needle(title: &str) -> String {
     format!("┌{}", buffer_cell_text(title))
 }
@@ -3129,6 +3133,257 @@ fn openclaw_config_route_render_uses_dedicated_env_page() {
 }
 
 #[test]
+fn openclaw_env_route_render_aligns_redacted_and_plain_values_in_two_columns() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawEnv;
+    app.focus = Focus::Content;
+
+    let mut data = minimal_data(&app.app_type);
+    data.config.openclaw_env = Some(crate::openclaw_config::OpenClawEnvConfig {
+        vars: std::collections::HashMap::from([
+            ("OPENCLAW_ENV_TOKEN".to_string(), json!("demo-token")),
+            ("MODE".to_string(), json!("development")),
+        ]),
+    });
+
+    let buf = render_with_size(&app, &data, 120, 24);
+    let content = content_text(&app, &buf);
+    let redacted_line = line_with(&content, "OPENCLAW_ENV_TOKEN");
+    let plain_line = line_with(&content, "MODE");
+
+    assert_eq!(
+        display_column_in_line(redacted_line, "[redacted]"),
+        display_column_in_line(plain_line, "development"),
+        "{content}"
+    );
+}
+
+#[test]
+fn openclaw_env_route_render_uses_explicit_empty_state_copy() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawEnv;
+    app.focus = Focus::Content;
+
+    let mut data = minimal_data(&app.app_type);
+    data.config.openclaw_env = Some(crate::openclaw_config::OpenClawEnvConfig {
+        vars: std::collections::HashMap::new(),
+    });
+
+    let content = content_text(&app, &render_with_size(&app, &data, 120, 24));
+
+    assert!(
+        content.contains("No environment variables configured"),
+        "{content}"
+    );
+    assert!(
+        !content.contains(&format!("  {}", texts::none())),
+        "{content}"
+    );
+}
+
+#[test]
+fn openclaw_env_route_render_keeps_warning_banner_separated_above_description_and_rows() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawEnv;
+    app.focus = Focus::Content;
+
+    let mut data = minimal_data(&app.app_type);
+    data.config.openclaw_env = Some(crate::openclaw_config::OpenClawEnvConfig {
+        vars: std::collections::HashMap::from([(
+            "OPENCLAW_ENV_MODE".to_string(),
+            json!("development"),
+        )]),
+    });
+    data.config.openclaw_warnings = Some(vec![crate::openclaw_config::OpenClawHealthWarning {
+        code: "stringified_env_vars".to_string(),
+        message: "Environment variables warning order contract".to_string(),
+        path: Some("env.vars".to_string()),
+    }]);
+
+    let buf = render_with_size(&app, &data, 120, 24);
+    let content = content_text(&app, &buf);
+    let warning_title_line = line_index(&content, texts::tui_openclaw_config_warning_title());
+    let warning_detail_line = line_index(&content, "Environment variables warning order contract");
+    let description_line = line_index(&content, texts::tui_openclaw_config_env_description());
+    let env_row_line = line_index(&content, "OPENCLAW_ENV_MODE");
+
+    assert!(warning_title_line < description_line, "{content}");
+    assert!(warning_detail_line + 1 < description_line, "{content}");
+    assert!(description_line < env_row_line, "{content}");
+}
+
+#[test]
+fn openclaw_env_route_render_keeps_description_spacer_before_env_block() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawEnv;
+    app.focus = Focus::Content;
+
+    let mut data = minimal_data(&app.app_type);
+    data.config.openclaw_env = Some(crate::openclaw_config::OpenClawEnvConfig {
+        vars: std::collections::HashMap::from([(
+            "OPENCLAW_ENV_MODE".to_string(),
+            json!("development"),
+        )]),
+    });
+
+    let rendered = render_with_size(&app, &data, 120, 24);
+    let content = content_text(&app, &rendered);
+    let lines = content.lines().collect::<Vec<_>>();
+    let description_index = line_index(&content, texts::tui_openclaw_config_env_description());
+    let block_index = lines
+        .iter()
+        .enumerate()
+        .skip(description_index + 1)
+        .find_map(|(index, line)| line.contains('┌').then_some(index))
+        .expect("env block should render after description");
+    let spacer = lines[description_index + 1];
+
+    assert!(description_index + 1 < block_index, "{content}");
+    assert!(spacer.chars().all(|ch| ch == ' ' || ch == '│'), "{content}");
+}
+
+#[test]
+fn openclaw_env_description_uses_explicit_muted_style() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawEnv;
+    app.focus = Focus::Content;
+
+    let mut data = minimal_data(&app.app_type);
+    data.config.openclaw_env = Some(crate::openclaw_config::OpenClawEnvConfig {
+        vars: std::collections::HashMap::from([(
+            "OPENCLAW_ENV_MODE".to_string(),
+            json!("development"),
+        )]),
+    });
+
+    let buf = render_with_size(&app, &data, 120, 24);
+    let content = content_text(&app, &buf);
+    let theme = theme_for(&app.app_type);
+
+    let description_row = line_with(&content, texts::tui_openclaw_config_env_description());
+    let description_row_index = line_index(&content, texts::tui_openclaw_config_env_description());
+    let description_start_col = column_in_line(
+        description_row,
+        texts::tui_openclaw_config_env_description(),
+    );
+    let description_end_col = column_in_line(description_row, "env.vars.");
+    let description_start_cell =
+        content_cell_at(&app, &buf, description_start_col, description_row_index);
+    let description_end_cell =
+        content_cell_at(&app, &buf, description_end_col, description_row_index);
+    let description_start_style = cell_style_signature(description_start_cell);
+    let description_end_style = cell_style_signature(description_end_cell);
+
+    assert_eq!(description_start_style, description_end_style, "{content}");
+    assert_eq!(description_start_cell.fg, theme.comment, "{content}");
+    assert_eq!(description_start_cell.bg, Color::Reset, "{content}");
+    assert_eq!(
+        description_start_cell.modifier,
+        Modifier::empty(),
+        "{content}"
+    );
+}
+
+#[test]
+fn openclaw_env_route_render_styles_redacted_values_as_protected_tokens() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawEnv;
+    app.focus = Focus::Content;
+
+    let mut data = minimal_data(&app.app_type);
+    data.config.openclaw_env = Some(crate::openclaw_config::OpenClawEnvConfig {
+        vars: std::collections::HashMap::from([
+            ("OPENCLAW_ENV_TOKEN".to_string(), json!("demo-token")),
+            ("OPENCLAW_ENV_MODE".to_string(), json!("development")),
+        ]),
+    });
+
+    let buf = render_with_size(&app, &data, 120, 24);
+    let content = content_text(&app, &buf);
+    let redacted_row_index = line_index(&content, "[redacted]");
+    let redacted_row = line_with(&content, "[redacted]");
+    let redacted_label_col = column_in_line(redacted_row, "OPENCLAW_ENV_TOKEN");
+    let redacted_col = column_in_line(redacted_row, "[redacted]");
+    let redacted_label_cell = content_cell_at(&app, &buf, redacted_label_col, redacted_row_index);
+    let redacted_cell = content_cell_at(&app, &buf, redacted_col, redacted_row_index);
+
+    let plain_row_index = line_index(&content, "development");
+    let plain_row = line_with(&content, "development");
+    let plain_label_col = column_in_line(plain_row, "OPENCLAW_ENV_MODE");
+    let plain_col = column_in_line(plain_row, "development");
+    let plain_label_cell = content_cell_at(&app, &buf, plain_label_col, plain_row_index);
+    let plain_cell = content_cell_at(&app, &buf, plain_col, plain_row_index);
+
+    assert_eq!(
+        cell_style_signature(plain_cell),
+        cell_style_signature(plain_label_cell),
+        "{content}"
+    );
+    assert_ne!(
+        cell_style_signature(redacted_cell),
+        cell_style_signature(redacted_label_cell),
+        "{content}"
+    );
+    assert_ne!(
+        cell_style_signature(redacted_cell),
+        cell_style_signature(plain_cell),
+        "{content}"
+    );
+}
+
+#[test]
+fn openclaw_env_no_color_keeps_protected_placeholder_visible() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::set("NO_COLOR", "1");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawEnv;
+    app.focus = Focus::Content;
+
+    let mut data = minimal_data(&app.app_type);
+    data.config.openclaw_env = Some(crate::openclaw_config::OpenClawEnvConfig {
+        vars: std::collections::HashMap::from([
+            ("OPENCLAW_ENV_TOKEN".to_string(), json!("demo-token")),
+            ("OPENCLAW_ENV_MODE".to_string(), json!("development")),
+        ]),
+    });
+
+    let content = content_text(&app, &render_with_size(&app, &data, 120, 24));
+    let redacted_line = line_with(&content, "OPENCLAW_ENV_TOKEN");
+    let plain_line = line_with(&content, "OPENCLAW_ENV_MODE");
+
+    assert!(redacted_line.contains("[redacted]"), "{content}");
+    assert!(!redacted_line.contains("demo-token"), "{content}");
+    assert!(plain_line.contains("development"), "{content}");
+    assert!(!plain_line.contains("[redacted]"), "{content}");
+}
+
+#[test]
 fn openclaw_env_editor_keeps_ctrl_s_save_hint() {
     let _lock = lock_env();
     let _lang = use_test_language(Language::English);
@@ -3435,6 +3690,7 @@ fn openclaw_tools_route_renders_grouped_profile_and_rules_blocks() {
     );
     let allow_row = line_index(&content, &buffer_cell_text("Read"));
     let allow_add = line_index(&content, &buffer_cell_text("+ 添加允许规则"));
+    let allow_deny_separator = line_index(&content, &buffer_cell_text("- - - - -"));
     let deny_label = line_index(
         &content,
         &block_label_needle(texts::tui_openclaw_tools_deny_list_label()),
@@ -3461,7 +3717,8 @@ fn openclaw_tools_route_renders_grouped_profile_and_rules_blocks() {
         rules_block < allow_label
             && allow_label < allow_row
             && allow_row < allow_add
-            && allow_add < deny_label
+            && allow_add < allow_deny_separator
+            && allow_deny_separator < deny_label
             && deny_label < deny_row
             && deny_row < deny_add,
         "{all}"
@@ -3477,7 +3734,215 @@ fn openclaw_tools_route_renders_grouped_profile_and_rules_blocks() {
 }
 
 #[test]
-fn openclaw_tools_route_renders_second_level_labels_with_indented_rows() {
+fn openclaw_tools_route_render_keeps_description_spacer_before_profile_block() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawTools;
+    app.focus = Focus::Content;
+
+    let mut data = minimal_data(&app.app_type);
+    data.config.openclaw_tools = Some(crate::openclaw_config::OpenClawToolsConfig {
+        profile: Some("coding".to_string()),
+        allow: vec!["Read".to_string()],
+        deny: vec!["Exec".to_string()],
+        extra: std::collections::HashMap::new(),
+    });
+
+    let rendered = render_with_size(&app, &data, 120, 24);
+    let content = content_text(&app, &rendered);
+    let lines = content.lines().collect::<Vec<_>>();
+    let description_index = line_index(&content, texts::tui_openclaw_tools_description());
+    let profile_block_index = line_index(
+        &content,
+        &block_title_needle(texts::tui_openclaw_tools_profile_block_title()),
+    );
+    let spacer = lines[description_index + 1];
+
+    assert!(description_index + 1 < profile_block_index, "{content}");
+    assert!(spacer.chars().all(|ch| ch == ' ' || ch == '│'), "{content}");
+}
+
+#[test]
+fn openclaw_tools_description_uses_explicit_muted_style() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawTools;
+    app.focus = Focus::Content;
+
+    let mut data = minimal_data(&app.app_type);
+    data.config.openclaw_tools = Some(crate::openclaw_config::OpenClawToolsConfig {
+        profile: Some("coding".to_string()),
+        allow: vec!["Read".to_string()],
+        deny: Vec::new(),
+        extra: std::collections::HashMap::new(),
+    });
+
+    let buf = render_with_size(&app, &data, 120, 24);
+    let content = content_text(&app, &buf);
+    let theme = theme_for(&app.app_type);
+
+    let description_row = line_with(&content, texts::tui_openclaw_tools_description());
+    let description_row_index = line_index(&content, texts::tui_openclaw_tools_description());
+    let description_start_col =
+        column_in_line(description_row, texts::tui_openclaw_tools_description());
+    let description_end_col = column_in_line(description_row, "allow/deny lists)");
+    let description_start_cell =
+        content_cell_at(&app, &buf, description_start_col, description_row_index);
+    let description_end_cell =
+        content_cell_at(&app, &buf, description_end_col, description_row_index);
+    let description_start_style = cell_style_signature(description_start_cell);
+    let description_end_style = cell_style_signature(description_end_cell);
+
+    assert_eq!(description_start_style, description_end_style, "{content}");
+    assert_eq!(description_start_cell.fg, theme.comment, "{content}");
+    assert_eq!(description_start_cell.bg, Color::Reset, "{content}");
+    assert_eq!(
+        description_start_cell.modifier,
+        Modifier::empty(),
+        "{content}"
+    );
+}
+
+#[test]
+fn openclaw_tools_primary_rules_block_styles_stay_subordinate_to_outer_pane() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawTools;
+    app.focus = Focus::Content;
+
+    let mut data = minimal_data(&app.app_type);
+    data.config.openclaw_tools = Some(crate::openclaw_config::OpenClawToolsConfig {
+        profile: Some("coding".to_string()),
+        allow: vec!["Read".to_string()],
+        deny: vec!["Exec".to_string()],
+        extra: std::collections::HashMap::new(),
+    });
+
+    let buf = render_with_size(&app, &data, 120, 24);
+    let content = content_text(&app, &buf);
+    let theme = theme_for(&app.app_type);
+    let content_rect = super::content_pane_rect(buf.area, &theme);
+    let rules_title = texts::tui_openclaw_tools_rules_block_title();
+    let rules_block = block_title_needle(rules_title);
+    let rules_block_line = line_with(&content, &rules_block);
+    let rules_block_row_index = line_index(&content, &rules_block);
+    let rules_border_col = display_column_in_line(rules_block_line, &rules_block);
+    let rules_title_col = display_column_in_line(rules_block_line, &buffer_cell_text(rules_title));
+    let outer_border_cell = &buf[(content_rect.x, content_rect.y)];
+    let rules_border_cell = content_cell_at(&app, &buf, rules_border_col, rules_block_row_index);
+    let rules_title_cell = content_cell_at(&app, &buf, rules_title_col, rules_block_row_index);
+
+    assert_eq!(outer_border_cell.fg, theme.accent, "{content}");
+    assert_eq!(rules_border_cell.symbol(), "┌");
+    assert_eq!(rules_border_cell.fg, theme.dim, "{content}");
+    assert_ne!(rules_border_cell.fg, theme.accent, "{content}");
+    assert!(
+        rules_border_cell.modifier.contains(Modifier::BOLD),
+        "{content}"
+    );
+
+    assert_eq!(rules_title_cell.fg, theme.comment, "{content}");
+    assert_ne!(rules_title_cell.fg, theme.accent, "{content}");
+    assert!(
+        rules_title_cell.modifier.contains(Modifier::BOLD),
+        "{content}"
+    );
+}
+
+#[test]
+fn openclaw_tools_route_selected_profile_row_does_not_use_literal_marker_prefix() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawTools;
+    app.focus = Focus::Content;
+    let mut form = crate::cli::tui::app::OpenClawToolsFormState::from_snapshot(None);
+    form.profile = Some("coding".to_string());
+    form.allow = vec!["Read".to_string()];
+    form.deny = vec!["Exec".to_string()];
+    form.section = crate::cli::tui::app::OpenClawToolsSection::Profile;
+    form.row = 0;
+    app.openclaw_tools_form = Some(form);
+
+    let mut data = minimal_data(&app.app_type);
+    data.config.openclaw_tools = Some(crate::openclaw_config::OpenClawToolsConfig {
+        profile: Some("coding".to_string()),
+        allow: vec!["Read".to_string()],
+        deny: vec!["Exec".to_string()],
+        extra: std::collections::HashMap::new(),
+    });
+
+    let rendered = render(&app, &data);
+    let all = all_text(&rendered);
+    let content = content_text(&app, &rendered);
+    let profile_row = line_with(&content, &buffer_cell_text("Profile: Coding"));
+    let profile_row_index = line_index(&content, &buffer_cell_text("Profile: Coding"));
+    let profile_row_col = display_column_in_line(profile_row, &buffer_cell_text("Profile: Coding"));
+    let profile_cell = content_cell_at(&app, &rendered, profile_row_col, profile_row_index);
+    let allow_row = line_with(&content, &buffer_cell_text("Read"));
+    let allow_row_index = line_index(&content, &buffer_cell_text("Read"));
+    let allow_row_col = display_column_in_line(allow_row, &buffer_cell_text("Read"));
+    let allow_cell = content_cell_at(&app, &rendered, allow_row_col, allow_row_index);
+
+    assert!(!profile_row.contains('>'), "{all}");
+    assert!(!profile_row.contains("| Profile: Coding"), "{all}");
+    assert_ne!(
+        cell_style_signature(profile_cell),
+        cell_style_signature(allow_cell)
+    );
+
+    let _no_color = EnvGuard::set("NO_COLOR", "1");
+    let no_color_rendered = render(&app, &data);
+    let no_color_content = content_text(&app, &no_color_rendered);
+    let no_color_profile_row = line_with(&no_color_content, &buffer_cell_text("Profile: Coding"));
+    let no_color_profile_row_index =
+        line_index(&no_color_content, &buffer_cell_text("Profile: Coding"));
+    let no_color_profile_row_col =
+        display_column_in_line(no_color_profile_row, &buffer_cell_text("Profile: Coding"));
+    let no_color_profile_cell = content_cell_at(
+        &app,
+        &no_color_rendered,
+        no_color_profile_row_col,
+        no_color_profile_row_index,
+    );
+    let no_color_allow_row = line_with(&no_color_content, &buffer_cell_text("Read"));
+    let no_color_allow_row_index = line_index(&no_color_content, &buffer_cell_text("Read"));
+    let no_color_allow_row_col =
+        display_column_in_line(no_color_allow_row, &buffer_cell_text("Read"));
+    let no_color_allow_cell = content_cell_at(
+        &app,
+        &no_color_rendered,
+        no_color_allow_row_col,
+        no_color_allow_row_index,
+    );
+
+    assert!(
+        !no_color_profile_row.contains("| Profile: Coding"),
+        "{no_color_content}"
+    );
+    assert!(
+        no_color_profile_cell.modifier.contains(Modifier::REVERSED),
+        "{no_color_content}"
+    );
+    assert!(
+        !no_color_allow_cell.modifier.contains(Modifier::REVERSED),
+        "{no_color_content}"
+    );
+}
+
+#[test]
+fn openclaw_tools_route_selected_rule_row_does_not_use_literal_chevron_prefix() {
     let _lock = lock_env();
     let _lang = use_test_language(Language::Chinese);
     let _no_color = EnvGuard::remove("NO_COLOR");
@@ -3509,49 +3974,130 @@ fn openclaw_tools_route_renders_second_level_labels_with_indented_rows() {
         &content,
         &block_label_needle(texts::tui_openclaw_tools_allow_list_label()),
     );
-    let allow_row = line_with(&content, &format!("> {}", buffer_cell_text("Read")));
+    let allow_row = line_with(&content, &buffer_cell_text("Read"));
+    let allow_row_index = line_index(&content, &buffer_cell_text("Read"));
+    let allow_row_col = display_column_in_line(allow_row, &buffer_cell_text("Read"));
+    let allow_cell = content_cell_at(&app, &rendered, allow_row_col, allow_row_index);
+    let sibling_row = line_with(&content, &buffer_cell_text("Glob"));
+    let sibling_row_index = line_index(&content, &buffer_cell_text("Glob"));
+    let sibling_row_col = display_column_in_line(sibling_row, &buffer_cell_text("Glob"));
+    let sibling_cell = content_cell_at(&app, &rendered, sibling_row_col, sibling_row_index);
+
+    assert!(!profile_row.contains('>'), "{all}");
+    assert!(!allow_label.contains('>'), "{all}");
+    assert!(!allow_row.contains('>'), "{all}");
+    assert_ne!(
+        cell_style_signature(allow_cell),
+        cell_style_signature(sibling_cell)
+    );
+
+    let _no_color = EnvGuard::set("NO_COLOR", "1");
+    let no_color_rendered = render(&app, &data);
+    let no_color_content = content_text(&app, &no_color_rendered);
+    let no_color_allow_row = line_with(&no_color_content, &buffer_cell_text("Read"));
+    let no_color_allow_row_index = line_index(&no_color_content, &buffer_cell_text("Read"));
+    let no_color_allow_row_col =
+        display_column_in_line(no_color_allow_row, &buffer_cell_text("Read"));
+    let no_color_allow_cell = content_cell_at(
+        &app,
+        &no_color_rendered,
+        no_color_allow_row_col,
+        no_color_allow_row_index,
+    );
+    let no_color_sibling_row = line_with(&no_color_content, &buffer_cell_text("Glob"));
+    let no_color_sibling_row_index = line_index(&no_color_content, &buffer_cell_text("Glob"));
+    let no_color_sibling_row_col =
+        display_column_in_line(no_color_sibling_row, &buffer_cell_text("Glob"));
+    let no_color_sibling_cell = content_cell_at(
+        &app,
+        &no_color_rendered,
+        no_color_sibling_row_col,
+        no_color_sibling_row_index,
+    );
+
+    assert!(!no_color_allow_row.contains('>'), "{no_color_content}");
+    assert!(
+        no_color_allow_cell.modifier.contains(Modifier::REVERSED),
+        "{no_color_content}"
+    );
+    assert!(
+        !no_color_sibling_cell.modifier.contains(Modifier::REVERSED),
+        "{no_color_content}"
+    );
+}
+
+#[test]
+fn openclaw_tools_route_aligns_allow_and_deny_rule_rows_with_add_rows() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::Chinese);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawTools;
+    app.focus = Focus::Content;
+    let mut form = crate::cli::tui::app::OpenClawToolsFormState::from_snapshot(None);
+    form.profile = Some("coding".to_string());
+    form.allow = vec!["Read".to_string(), "Glob".to_string()];
+    form.deny = vec!["Exec".to_string()];
+    form.section = crate::cli::tui::app::OpenClawToolsSection::Allow;
+    form.row = 0;
+    app.openclaw_tools_form = Some(form);
+
+    let mut data = minimal_data(&app.app_type);
+    data.config.openclaw_tools = Some(crate::openclaw_config::OpenClawToolsConfig {
+        profile: Some("coding".to_string()),
+        allow: vec!["Read".to_string(), "Glob".to_string()],
+        deny: vec!["Exec".to_string()],
+        extra: std::collections::HashMap::new(),
+    });
+
+    let rendered = render(&app, &data);
+    let content = content_text(&app, &rendered);
+    let allow_label = line_with(
+        &content,
+        &block_label_needle(texts::tui_openclaw_tools_allow_list_label()),
+    );
+    let allow_row = line_with(&content, &buffer_cell_text("Read"));
+    let allow_label_col = display_column_in_line(
+        allow_label,
+        &buffer_cell_text(texts::tui_openclaw_tools_allow_list_label()),
+    );
+    let deny_row = line_with(&content, &buffer_cell_text("Exec"));
     let allow_add = line_with(&content, &buffer_cell_text("+ 添加允许规则"));
+    let separator = line_with(&content, &buffer_cell_text("- - - - -"));
     let deny_label = line_with(
         &content,
         &block_label_needle(texts::tui_openclaw_tools_deny_list_label()),
     );
-    let deny_row = line_with(&content, &buffer_cell_text("Exec"));
     let deny_add = line_with(&content, &buffer_cell_text("+ 添加拒绝规则"));
+    let deny_label_col = display_column_in_line(
+        deny_label,
+        &buffer_cell_text(texts::tui_openclaw_tools_deny_list_label()),
+    );
 
-    assert!(!profile_row.contains('>'), "{all}");
-    assert!(!allow_label.contains('>'), "{all}");
-    assert!(allow_row.contains('>'), "{all}");
-    assert!(
-        spaces_before_substring(allow_row, ">")
-            > spaces_before_substring(
-                allow_label,
-                &buffer_cell_text(texts::tui_openclaw_tools_allow_list_label())
-            ),
+    assert_eq!(
+        allow_label_col,
+        display_column_in_line(allow_row, &buffer_cell_text("Read")),
         "{content}"
     );
-    assert!(
-        spaces_before_substring(allow_add, &buffer_cell_text("+ 添加允许规则"))
-            > spaces_before_substring(
-                allow_label,
-                &buffer_cell_text(texts::tui_openclaw_tools_allow_list_label())
-            ),
+    assert_eq!(
+        allow_label_col,
+        display_column_in_line(allow_add, &buffer_cell_text("+ 添加允许规则")),
         "{content}"
     );
-    assert!(!deny_label.contains('>'), "{all}");
-    assert!(
-        spaces_before_substring(deny_row, &buffer_cell_text("Exec"))
-            > spaces_before_substring(
-                deny_label,
-                &buffer_cell_text(texts::tui_openclaw_tools_deny_list_label())
-            ),
+    assert_eq!(
+        allow_label_col,
+        display_column_in_line(separator, &buffer_cell_text("- - - - -")),
         "{content}"
     );
-    assert!(
-        spaces_before_substring(deny_add, &buffer_cell_text("+ 添加拒绝规则"))
-            > spaces_before_substring(
-                deny_label,
-                &buffer_cell_text(texts::tui_openclaw_tools_deny_list_label())
-            ),
+    assert_eq!(
+        deny_label_col,
+        display_column_in_line(deny_row, &buffer_cell_text("Exec")),
+        "{content}"
+    );
+    assert_eq!(
+        deny_label_col,
+        display_column_in_line(deny_add, &buffer_cell_text("+ 添加拒绝规则")),
         "{content}"
     );
 }
@@ -3583,10 +4129,86 @@ fn openclaw_tools_route_keeps_selected_rule_visible_in_short_viewport() {
 
     let rendered = render_with_size(&app, &data, 72, 15);
     let content = content_text(&app, &rendered);
+    assert!(content.contains(&buffer_cell_text("deny-08")), "{content}");
+
+    let _no_color = EnvGuard::set("NO_COLOR", "1");
+    let no_color_rendered = render_with_size(&app, &data, 72, 15);
+    let no_color_content = content_text(&app, &no_color_rendered);
+    let selected_row = line_with(&no_color_content, &buffer_cell_text("deny-08"));
+    let selected_row_index = line_index(&no_color_content, &buffer_cell_text("deny-08"));
+    let selected_row_col = display_column_in_line(selected_row, &buffer_cell_text("deny-08"));
+    let selected_cell = content_cell_at(
+        &app,
+        &no_color_rendered,
+        selected_row_col,
+        selected_row_index,
+    );
+    assert!(
+        selected_cell.modifier.contains(Modifier::REVERSED),
+        "{no_color_content}"
+    );
+}
+
+#[test]
+fn openclaw_tools_route_wraps_long_rule_values_in_narrow_width() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let tail = "TAILMARK";
+    let tail_fragment = "MARK";
+    let long_rule = format!("allow.rules.segment.segment.segment.{tail}");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawTools;
+    app.focus = Focus::Content;
+
+    let mut data = minimal_data(&app.app_type);
+    data.config.openclaw_tools = Some(crate::openclaw_config::OpenClawToolsConfig {
+        profile: Some("coding".to_string()),
+        allow: vec![long_rule.clone()],
+        deny: vec!["Exec".to_string()],
+        extra: std::collections::HashMap::new(),
+    });
+
+    let mut form = crate::cli::tui::app::OpenClawToolsFormState::from_snapshot(
+        data.config.openclaw_tools.as_ref(),
+    );
+    form.section = crate::cli::tui::app::OpenClawToolsSection::Allow;
+    form.row = 0;
+    app.openclaw_tools_form = Some(form);
+
+    let rendered = render_with_size(&app, &data, 72, 18);
+    let content = content_text(&app, &rendered);
+    assert!(
+        content.contains(&buffer_cell_text(tail_fragment)),
+        "{content}"
+    );
+
+    let _no_color = EnvGuard::set("NO_COLOR", "1");
+    let no_color_rendered = render_with_size(&app, &data, 72, 18);
+    let no_color_content = content_text(&app, &no_color_rendered);
+    assert!(
+        no_color_content.contains(&buffer_cell_text(tail_fragment)),
+        "{no_color_content}"
+    );
+
+    let tail_row = line_with(&no_color_content, &buffer_cell_text(tail_fragment));
+    let tail_row_index = line_index(&no_color_content, &buffer_cell_text(tail_fragment));
+    let tail_row_col = display_column_in_line(tail_row, &buffer_cell_text(tail_fragment));
+    let tail_cell = content_cell_at(&app, &no_color_rendered, tail_row_col, tail_row_index);
+    let add_row = line_with(&no_color_content, &buffer_cell_text("+ Add allow rule"));
+    let add_row_index = line_index(&no_color_content, &buffer_cell_text("+ Add allow rule"));
+    let add_row_col = display_column_in_line(add_row, &buffer_cell_text("+ Add allow rule"));
+    let add_cell = content_cell_at(&app, &no_color_rendered, add_row_col, add_row_index);
 
     assert!(
-        content.contains(&format!("> {}", buffer_cell_text("deny-08"))),
-        "{content}"
+        tail_cell.modifier.contains(Modifier::REVERSED),
+        "{no_color_content}"
+    );
+    assert!(
+        !add_cell.modifier.contains(Modifier::REVERSED),
+        "{no_color_content}"
     );
 }
 
@@ -3698,6 +4320,7 @@ fn openclaw_tools_profile_picker_overlay_renders_supported_choices_in_order() {
         .filter(|line| {
             labels.iter().any(|label| line.contains(label))
                 && line.contains('│')
+                && !line.contains("Profile:")
                 && !line.contains('|')
                 && !line.contains('>')
         })
@@ -3807,6 +4430,50 @@ fn openclaw_tools_route_shows_real_parse_warning_without_default_seeded_form_val
     );
     assert!(all.contains("Failed to parse tools config"), "{all}");
     assert!(!all.contains("Profile: Not set"), "{all}");
+}
+
+#[test]
+fn openclaw_tools_load_failed_description_uses_muted_comment_style() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawTools;
+    app.focus = Focus::Content;
+
+    let mut data = minimal_data(&app.app_type);
+    data.config.openclaw_tools = None;
+    data.config.openclaw_warnings = Some(vec![crate::openclaw_config::OpenClawHealthWarning {
+        code: "config_parse_failed".to_string(),
+        message: "Failed to parse tools.profile".to_string(),
+        path: Some("tools.profile".to_string()),
+    }]);
+
+    let buf = render_with_size(&app, &data, 120, 16);
+    let content = content_text(&app, &buf);
+    let theme = theme_for(&app.app_type);
+
+    let description_row = line_with(&content, texts::tui_openclaw_tools_description());
+    let description_row_index = line_index(&content, texts::tui_openclaw_tools_description());
+    let description_start_col =
+        column_in_line(description_row, texts::tui_openclaw_tools_description());
+    let description_end_col = column_in_line(description_row, "allow/deny lists)");
+    let description_start_cell =
+        content_cell_at(&app, &buf, description_start_col, description_row_index);
+    let description_end_cell =
+        content_cell_at(&app, &buf, description_end_col, description_row_index);
+    let description_start_style = cell_style_signature(description_start_cell);
+    let description_end_style = cell_style_signature(description_end_cell);
+
+    assert_eq!(description_start_style, description_end_style, "{content}");
+    assert_eq!(description_start_cell.fg, theme.comment, "{content}");
+    assert_eq!(description_start_cell.bg, Color::Reset, "{content}");
+    assert_eq!(
+        description_start_cell.modifier,
+        Modifier::empty(),
+        "{content}"
+    );
 }
 
 #[test]
@@ -4043,14 +4710,16 @@ fn workspace_route_render_shows_workspace_files_and_daily_memory_entry() {
 }
 
 #[test]
-fn workspace_route_render_groups_workspace_files_and_daily_memory_sections() {
+fn workspace_route_render_places_directory_summary_above_workspace_files_block_and_keeps_status_column_aligned(
+) {
     let _lock = lock_env();
-    let _lang = use_test_language(Language::Chinese);
+    let _lang = use_test_language(Language::English);
     let _no_color = EnvGuard::remove("NO_COLOR");
 
     let mut app = App::new(Some(AppType::OpenClaw));
     app.route = Route::ConfigOpenClawWorkspace;
     app.focus = Focus::Content;
+    app.workspace_idx = 1;
 
     let mut data = minimal_data(&app.app_type);
     data.config.openclaw_workspace = OpenClawWorkspaceSnapshot {
@@ -4069,47 +4738,199 @@ fn workspace_route_render_groups_workspace_files_and_daily_memory_sections() {
     };
 
     let rendered = render(&app, &data);
-    let all = all_text(&rendered);
     let content = content_text(&app, &rendered);
-    let workspace_block = line_index(&content, &buffer_cell_text("Workspace 文件"));
-    let daily_memory_block = line_index(
+    let key_bar_line = line_index(
         &content,
-        &buffer_cell_text(texts::tui_openclaw_workspace_daily_memory_label()),
+        &format!(
+            "Enter {}  o {}",
+            texts::tui_key_open(),
+            texts::tui_key_open_directory()
+        ),
     );
-    let workspace_dir = line_index(
+    let directory_summary = line_index(
         &content,
         &buffer_cell_text(texts::tui_openclaw_workspace_directory_label()),
     );
-    let memory_dir = line_index(
-        &content,
-        &buffer_cell_text(texts::tui_openclaw_daily_memory_directory_label()),
-    );
-    assert!(workspace_block < daily_memory_block, "{all}");
-    assert!(
-        workspace_block < workspace_dir && workspace_dir < daily_memory_block,
-        "{all}"
-    );
-    assert!(all.contains(&buffer_cell_text("AGENTS.md")), "{all}");
-    assert!(all.contains(&buffer_cell_text("SOUL.md")), "{all}");
-    assert!(daily_memory_block < memory_dir, "{all}");
-    assert!(
-        !content.lines().enumerate().any(|(index, line)| {
-            index > daily_memory_block
-                && line.contains(&buffer_cell_text(texts::tui_key_open_directory()))
-        }),
+    let workspace_files_block = content
+        .lines()
+        .enumerate()
+        .find_map(|(index, line)| {
+            (index > key_bar_line
+                && line.contains(&block_title_needle(
+                    texts::tui_openclaw_workspace_files_block_title(),
+                )))
+            .then_some(index)
+        })
+        .unwrap_or_else(|| panic!("missing inner workspace files block in:\n{content}"));
+    assert!(directory_summary < workspace_files_block, "{content}");
+
+    let exists_row = line_with(&content, &buffer_cell_text("AGENTS.md"));
+    let missing_row = line_with(&content, &buffer_cell_text("SOUL.md"));
+    assert_eq!(
+        display_column_in_line(
+            exists_row,
+            &buffer_cell_text(texts::tui_openclaw_workspace_status_exists())
+        ),
+        display_column_in_line(
+            missing_row,
+            &buffer_cell_text(texts::tui_openclaw_workspace_status_missing())
+        ),
         "{content}"
     );
-    assert!(
-        !content.lines().enumerate().any(|(index, line)| {
-            index > daily_memory_block && line.contains(&buffer_cell_text(texts::tui_key_open()))
-        }),
-        "{content}"
-    );
-    assert!(all.contains("remember this"), "{all}");
 }
 
 #[test]
-fn workspace_route_render_does_not_leave_an_unused_gap_before_body_blocks() {
+fn workspace_route_render_keeps_selected_workspace_row_visible_in_short_viewport() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawWorkspace;
+    app.focus = Focus::Content;
+    app.workspace_idx = ALLOWED_FILES.len() - 1;
+
+    let mut data = minimal_data(&app.app_type);
+    data.config.openclaw_workspace = OpenClawWorkspaceSnapshot {
+        directory_path: std::path::PathBuf::from("/tmp/.openclaw/workspace"),
+        file_exists: std::collections::HashMap::from([(
+            ALLOWED_FILES[ALLOWED_FILES.len() - 1].to_string(),
+            true,
+        )]),
+        daily_memory_files: vec![DailyMemoryFileInfo {
+            filename: "2026-03-20.md".to_string(),
+            date: "2026-03-20".to_string(),
+            size_bytes: 12,
+            modified_at: 1,
+            preview: "remember this".to_string(),
+        }],
+    };
+
+    let rendered = render_with_size(&app, &data, 72, 12);
+    let content = content_text(&app, &rendered);
+
+    let selected_row = line_with(
+        &content,
+        &buffer_cell_text(ALLOWED_FILES[ALLOWED_FILES.len() - 1]),
+    );
+    assert!(
+        selected_row.contains(&buffer_cell_text(
+            texts::tui_openclaw_workspace_status_exists()
+        )),
+        "{content}"
+    );
+}
+
+#[test]
+fn workspace_route_render_selected_rows_do_not_use_literal_chevron_prefix() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawWorkspace;
+    app.focus = Focus::Content;
+
+    let mut data = minimal_data(&app.app_type);
+    data.config.openclaw_workspace = OpenClawWorkspaceSnapshot {
+        directory_path: std::path::PathBuf::from("/tmp/.openclaw/workspace"),
+        file_exists: std::collections::HashMap::from([(ALLOWED_FILES[0].to_string(), true)]),
+        daily_memory_files: vec![DailyMemoryFileInfo {
+            filename: "2026-03-20.md".to_string(),
+            date: "2026-03-20".to_string(),
+            size_bytes: 12,
+            modified_at: 1,
+            preview: "remember this".to_string(),
+        }],
+    };
+
+    app.workspace_idx = 0;
+    let file_rendered = render(&app, &data);
+    let file_content = content_text(&app, &file_rendered);
+    let file_row_index = line_index(&file_content, &buffer_cell_text(ALLOWED_FILES[0]));
+    let file_row = line_with(&file_content, &buffer_cell_text(ALLOWED_FILES[0]));
+    let file_value_col = column_in_line(file_row, &buffer_cell_text(ALLOWED_FILES[0]));
+    let file_cell = content_cell_at(&app, &file_rendered, file_value_col, file_row_index);
+    let missing_row_index = line_index(&file_content, &buffer_cell_text(ALLOWED_FILES[1]));
+    let missing_row = line_with(&file_content, &buffer_cell_text(ALLOWED_FILES[1]));
+    let missing_value_col = column_in_line(missing_row, &buffer_cell_text(ALLOWED_FILES[1]));
+    let missing_cell = content_cell_at(&app, &file_rendered, missing_value_col, missing_row_index);
+    assert!(!file_row.contains('>'), "{file_content}");
+    assert_ne!(
+        cell_style_signature(file_cell),
+        cell_style_signature(missing_cell)
+    );
+
+    app.workspace_idx = ALLOWED_FILES.len();
+    let daily_memory_rendered = render(&app, &data);
+    let daily_memory_content = content_text(&app, &daily_memory_rendered);
+    let daily_memory_value = buffer_cell_text(&format!(
+        "{}: {}",
+        texts::tui_openclaw_workspace_daily_memory_label(),
+        texts::tui_openclaw_workspace_daily_memory_count(
+            data.config.openclaw_workspace.daily_memory_files.len()
+        )
+    ));
+    let daily_memory_row_index = line_index(&daily_memory_content, &daily_memory_value);
+    let daily_memory_row = line_with(&daily_memory_content, &daily_memory_value);
+    let daily_memory_value_col = column_in_line(daily_memory_row, &daily_memory_value);
+    let daily_memory_cell = content_cell_at(
+        &app,
+        &daily_memory_rendered,
+        daily_memory_value_col,
+        daily_memory_row_index,
+    );
+    let file_row_index = line_index(&daily_memory_content, &buffer_cell_text(ALLOWED_FILES[0]));
+    let file_row = line_with(&daily_memory_content, &buffer_cell_text(ALLOWED_FILES[0]));
+    let file_value_col = column_in_line(file_row, &buffer_cell_text(ALLOWED_FILES[0]));
+    let file_cell = content_cell_at(&app, &daily_memory_rendered, file_value_col, file_row_index);
+    assert!(!daily_memory_row.contains('>'), "{daily_memory_content}");
+    assert_ne!(
+        cell_style_signature(daily_memory_cell),
+        cell_style_signature(file_cell)
+    );
+
+    let _no_color = EnvGuard::set("NO_COLOR", "1");
+    app.workspace_idx = 0;
+    let no_color_rendered = render(&app, &data);
+    let no_color_content = content_text(&app, &no_color_rendered);
+    let no_color_selected_row_index =
+        line_index(&no_color_content, &buffer_cell_text(ALLOWED_FILES[0]));
+    let no_color_selected_row = line_with(&no_color_content, &buffer_cell_text(ALLOWED_FILES[0]));
+    let no_color_selected_col =
+        column_in_line(no_color_selected_row, &buffer_cell_text(ALLOWED_FILES[0]));
+    let no_color_selected_cell = content_cell_at(
+        &app,
+        &no_color_rendered,
+        no_color_selected_col,
+        no_color_selected_row_index,
+    );
+    let no_color_unselected_row_index =
+        line_index(&no_color_content, &buffer_cell_text(ALLOWED_FILES[1]));
+    let no_color_unselected_row = line_with(&no_color_content, &buffer_cell_text(ALLOWED_FILES[1]));
+    let no_color_unselected_col =
+        column_in_line(no_color_unselected_row, &buffer_cell_text(ALLOWED_FILES[1]));
+    let no_color_unselected_cell = content_cell_at(
+        &app,
+        &no_color_rendered,
+        no_color_unselected_col,
+        no_color_unselected_row_index,
+    );
+    assert!(!no_color_selected_row.contains('>'), "{no_color_content}");
+    assert!(
+        no_color_selected_cell.modifier.contains(Modifier::REVERSED),
+        "{no_color_content}"
+    );
+    assert!(
+        !no_color_unselected_cell
+            .modifier
+            .contains(Modifier::REVERSED),
+        "{no_color_content}"
+    );
+}
+
+#[test]
+fn workspace_route_render_does_not_leave_an_unused_gap_before_body_content() {
     let _lock = lock_env();
     let _lang = use_test_language(Language::English);
     let _no_color = EnvGuard::remove("NO_COLOR");
@@ -4128,19 +4949,150 @@ fn workspace_route_render_does_not_leave_an_unused_gap_before_body_blocks() {
             texts::tui_key_open_directory()
         ),
     );
-    let workspace_block_line = content
+    let first_body_content_line = content
         .lines()
         .enumerate()
         .find_map(|(index, line)| {
             (index > key_bar_line
-                && line.contains(&block_title_needle(
+                && (line.contains(&buffer_cell_text(
+                    texts::tui_openclaw_workspace_directory_label(),
+                )) || line.contains(&block_title_needle(
                     texts::tui_openclaw_workspace_files_block_title(),
-                )))
+                ))))
             .then_some(index)
         })
-        .unwrap_or_else(|| panic!("missing workspace files block title in:\n{content}"));
+        .unwrap_or_else(|| panic!("missing workspace body content in:\n{content}"));
 
-    assert_eq!(workspace_block_line - key_bar_line, 1, "{content}");
+    assert_eq!(first_body_content_line - key_bar_line, 1, "{content}");
+}
+
+#[test]
+fn workspace_route_render_wraps_long_summary_and_daily_memory_values_in_narrow_width() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawWorkspace;
+    app.focus = Focus::Content;
+
+    let long_workspace_tail = "workspace-tail-marker";
+    let long_memory_tail = "workspace-tail-marker/memory";
+    let long_preview_tail = "preview-tail-marker";
+
+    let mut data = minimal_data(&app.app_type);
+    data.config.openclaw_workspace = OpenClawWorkspaceSnapshot {
+        directory_path: std::path::PathBuf::from(format!(
+            "/tmp/.openclaw/workspace/teams/alpha/project/nested/{long_workspace_tail}"
+        )),
+        file_exists: std::collections::HashMap::from([(ALLOWED_FILES[0].to_string(), true)]),
+        daily_memory_files: vec![DailyMemoryFileInfo {
+            filename: "2026-03-20.md".to_string(),
+            date: "2026-03-20".to_string(),
+            size_bytes: 12,
+            modified_at: 1,
+            preview: format!(
+                "handoff notes for the workspace redesign should keep {long_preview_tail} visible"
+            ),
+        }],
+    };
+
+    let rendered = render_with_size(&app, &data, 76, 28);
+    let content = content_text(&app, &rendered);
+
+    assert!(content.contains(long_workspace_tail), "{content}");
+    assert!(content.contains(long_memory_tail), "{content}");
+    assert!(content.contains(long_preview_tail), "{content}");
+}
+
+#[test]
+fn workspace_route_render_long_summary_still_keeps_selected_block_visible_in_short_viewport() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawWorkspace;
+    app.focus = Focus::Content;
+    app.workspace_idx = ALLOWED_FILES.len() - 1;
+
+    let mut data = minimal_data(&app.app_type);
+    data.config.openclaw_workspace = OpenClawWorkspaceSnapshot {
+        directory_path: std::path::PathBuf::from(
+            "/tmp/.openclaw/workspace/teams/alpha/project/deeply/nested/summary-wrap-visibility-marker",
+        ),
+        file_exists: std::collections::HashMap::from([(
+            ALLOWED_FILES[ALLOWED_FILES.len() - 1].to_string(),
+            true,
+        )]),
+        daily_memory_files: vec![DailyMemoryFileInfo {
+            filename: "2026-03-20.md".to_string(),
+            date: "2026-03-20".to_string(),
+            size_bytes: 12,
+            modified_at: 1,
+            preview: "preview-hidden-by-summary-marker".to_string(),
+        }],
+    };
+
+    let content = content_text(&app, &render_with_size(&app, &data, 48, 10));
+
+    assert!(
+        content.contains(&buffer_cell_text(ALLOWED_FILES[ALLOWED_FILES.len() - 1])),
+        "{content}"
+    );
+    assert!(
+        !content.contains("preview-hidden-by-summary-marker"),
+        "{content}"
+    );
+}
+
+#[test]
+fn workspace_route_render_tight_height_prioritizes_selected_block() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::ConfigOpenClawWorkspace;
+    app.focus = Focus::Content;
+
+    let mut data = minimal_data(&app.app_type);
+    data.config.openclaw_workspace = OpenClawWorkspaceSnapshot {
+        directory_path: std::path::PathBuf::from("/w"),
+        file_exists: std::collections::HashMap::from([(
+            ALLOWED_FILES[ALLOWED_FILES.len() - 1].to_string(),
+            true,
+        )]),
+        daily_memory_files: vec![DailyMemoryFileInfo {
+            filename: "2026-03-20.md".to_string(),
+            date: "2026-03-20".to_string(),
+            size_bytes: 12,
+            modified_at: 1,
+            preview: "preview-priority-marker".to_string(),
+        }],
+    };
+
+    app.workspace_idx = ALLOWED_FILES.len() - 1;
+    let file_selected = content_text(&app, &render_with_size(&app, &data, 72, 17));
+    assert!(
+        file_selected.contains(&buffer_cell_text("BOOTSTRAP.md")),
+        "{file_selected}"
+    );
+    assert!(
+        !file_selected.contains("preview-priority-marker"),
+        "{file_selected}"
+    );
+
+    app.workspace_idx = ALLOWED_FILES.len();
+    let daily_selected = content_text(&app, &render_with_size(&app, &data, 72, 17));
+    assert!(
+        daily_selected.contains("preview-priority-marker"),
+        "{daily_selected}"
+    );
+    assert!(
+        !daily_selected.contains(&buffer_cell_text("BOOTSTRAP.md")),
+        "{daily_selected}"
+    );
 }
 
 #[test]

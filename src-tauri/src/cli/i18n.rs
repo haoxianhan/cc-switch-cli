@@ -3483,6 +3483,14 @@ pub mod texts {
         }
     }
 
+    pub fn tui_openclaw_config_env_empty() -> &'static str {
+        if is_chinese() {
+            "未配置环境变量"
+        } else {
+            "No environment variables configured"
+        }
+    }
+
     pub fn tui_openclaw_config_tools_editor_title() -> &'static str {
         if is_chinese() {
             "编辑工具权限 (JSON)"
