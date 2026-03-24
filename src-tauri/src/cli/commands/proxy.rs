@@ -119,6 +119,11 @@ fn serve_proxy(
                 return Err(AppError::Message(err));
             }
 
+            if let Err(err) = service.publish_runtime_session_if_needed(&server_info) {
+                let _ = service.stop().await;
+                return Err(AppError::Message(err));
+            }
+
             println!("{}", highlight(crate::t!("Local Proxy Running", "本地代理已启动")));
             println!(
                 "{}",

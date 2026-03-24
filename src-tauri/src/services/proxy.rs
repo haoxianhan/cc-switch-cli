@@ -242,9 +242,7 @@ impl ProxyService {
                 .filter(|session| session.kind.is_managed_external())
                 .filter(|session| session.session_token.as_deref() == Some(session_token.as_str()))
             {
-                if Self::load_external_proxy_status(&session).await.is_some()
-                    && self.is_app_takeover_active(&app_type).await?
-                {
+                if Self::load_external_proxy_status(&session).await.is_some() {
                     let info = ProxyServerInfo {
                         address: session.address,
                         port: session.port,
@@ -319,12 +317,25 @@ impl ProxyService {
 
         let server = ProxyServer::new(config, self.db.clone());
         let info = server.start().await?;
-        if let Err(error) = self.persist_runtime_session(&info) {
-            let _ = server.stop().await;
-            return Err(error);
+        if !Self::defer_runtime_session_publish() {
+            if let Err(error) = self.persist_runtime_session(&info) {
+                let _ = server.stop().await;
+                return Err(error);
+            }
         }
         *self.runtime.server.write().await = Some(server);
         Ok(info)
+    }
+
+    pub(crate) fn publish_runtime_session_if_needed(
+        &self,
+        info: &ProxyServerInfo,
+    ) -> Result<(), String> {
+        if Self::defer_runtime_session_publish() && self.load_persisted_runtime_session().is_none()
+        {
+            self.persist_runtime_session(info)?;
+        }
+        Ok(())
     }
 
     pub async fn recover_takeovers_on_startup(&self) -> Result<(), String> {
@@ -1238,6 +1249,10 @@ impl ProxyService {
             .map_err(|error| format!("persist proxy runtime session failed: {error}"))
     }
 
+    fn defer_runtime_session_publish() -> bool {
+        PersistedProxyRuntimeSessionKind::from_env().is_managed_external()
+    }
+
     fn clear_persisted_runtime_session(&self) -> Result<(), String> {
         self.db
             .delete_setting(PROXY_RUNTIME_SESSION_KEY)
@@ -1462,6 +1477,98 @@ mod tests {
     use super::*;
     use crate::proxy::circuit_breaker::CircuitBreakerConfig;
     use serial_test::serial;
+    use std::ffi::OsString;
+
+    struct ManagedRuntimeEnvGuard {
+        old_kind: Option<OsString>,
+        old_token: Option<OsString>,
+    }
+
+    impl ManagedRuntimeEnvGuard {
+        fn set(token: &str) -> Self {
+            let old_kind = std::env::var_os(PROXY_RUNTIME_KIND_ENV_KEY);
+            let old_token = std::env::var_os(PROXY_RUNTIME_SESSION_TOKEN_ENV_KEY);
+            std::env::set_var(
+                PROXY_RUNTIME_KIND_ENV_KEY,
+                PersistedProxyRuntimeSessionKind::ManagedExternal.as_env_value(),
+            );
+            std::env::set_var(PROXY_RUNTIME_SESSION_TOKEN_ENV_KEY, token);
+            Self {
+                old_kind,
+                old_token,
+            }
+        }
+    }
+
+    impl Drop for ManagedRuntimeEnvGuard {
+        fn drop(&mut self) {
+            match &self.old_kind {
+                Some(value) => std::env::set_var(PROXY_RUNTIME_KIND_ENV_KEY, value),
+                None => std::env::remove_var(PROXY_RUNTIME_KIND_ENV_KEY),
+            }
+            match &self.old_token {
+                Some(value) => std::env::set_var(PROXY_RUNTIME_SESSION_TOKEN_ENV_KEY, value),
+                None => std::env::remove_var(PROXY_RUNTIME_SESSION_TOKEN_ENV_KEY),
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn managed_external_runtime_does_not_publish_session_before_ready_signal() {
+        let _env = ManagedRuntimeEnvGuard::set("test-managed-session-token");
+        let db = Arc::new(Database::memory().expect("create database"));
+        let service = ProxyService::new(db.clone());
+
+        let mut runtime_config = service.get_config().await.expect("get proxy config");
+        runtime_config.listen_port = 0;
+        service
+            .start_with_runtime_config(runtime_config)
+            .await
+            .expect("start proxy runtime");
+
+        assert!(
+            db.get_setting(PROXY_RUNTIME_SESSION_KEY)
+                .expect("read runtime session")
+                .is_none(),
+            "managed external runtime should wait to publish its session until takeover is finished"
+        );
+
+        service.stop().await.expect("stop proxy runtime");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn managed_external_runtime_publishes_session_when_ready_signal_is_sent() {
+        let _env = ManagedRuntimeEnvGuard::set("test-managed-session-token");
+        let db = Arc::new(Database::memory().expect("create database"));
+        let service = ProxyService::new(db.clone());
+
+        let mut runtime_config = service.get_config().await.expect("get proxy config");
+        runtime_config.listen_port = 0;
+        let info = service
+            .start_with_runtime_config(runtime_config)
+            .await
+            .expect("start proxy runtime");
+
+        service
+            .publish_runtime_session_if_needed(&info)
+            .expect("publish managed runtime session");
+
+        let session: PersistedProxyRuntimeSession = serde_json::from_str(
+            &db.get_setting(PROXY_RUNTIME_SESSION_KEY)
+                .expect("read runtime session")
+                .expect("persisted runtime session"),
+        )
+        .expect("parse runtime session");
+        assert!(session.kind.is_managed_external());
+        assert_eq!(
+            session.session_token.as_deref(),
+            Some("test-managed-session-token")
+        );
+
+        service.stop().await.expect("stop proxy runtime");
+    }
 
     #[tokio::test]
     #[serial]

@@ -429,9 +429,6 @@ mod issue_71_tests {
         });
         let provider: Provider =
             serde_json::from_value(provider_json).expect("should deserialize provider");
-        assert_eq!(
-            provider.meta.unwrap().apply_common_config,
-            Some(true)
-        );
+        assert_eq!(provider.meta.unwrap().apply_common_config, Some(true));
     }
 }
