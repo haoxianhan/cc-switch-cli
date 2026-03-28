@@ -40,6 +40,7 @@ impl App {
             KeyCode::Char('a') => {
                 self.overlay = Overlay::McpEnvEntryEditor(McpEnvEntryEditorState {
                     row: None,
+                    return_selected: *selected,
                     field: McpEnvEditorField::Key,
                     key: TextInput::new(""),
                     value: TextInput::new(""),
@@ -52,6 +53,7 @@ impl App {
                 };
                 self.overlay = Overlay::McpEnvEntryEditor(McpEnvEntryEditorState {
                     row: Some(*selected),
+                    return_selected: *selected,
                     field: McpEnvEditorField::Key,
                     key: TextInput::new(row.key),
                     value: TextInput::new(row.value),
@@ -74,8 +76,11 @@ impl App {
 
         match key.code {
             KeyCode::Esc => {
-                let selected = match &self.overlay {
-                    Overlay::McpEnvEntryEditor(editor) => editor.row.unwrap_or(0),
+                let selected = match (&self.overlay, self.form.as_ref()) {
+                    (Overlay::McpEnvEntryEditor(editor), Some(FormState::McpAdd(mcp))) => editor
+                        .return_selected
+                        .min(mcp.env_rows.len().saturating_sub(1)),
+                    (Overlay::McpEnvEntryEditor(editor), _) => editor.return_selected,
                     _ => 0,
                 };
                 self.overlay = Overlay::McpEnvPicker { selected };
@@ -126,10 +131,12 @@ impl App {
                     return Some(Action::None);
                 };
 
-                mcp.upsert_env_row(row, key_text, value);
-                let selected = row
-                    .unwrap_or_else(|| mcp.env_rows.len().saturating_sub(1))
-                    .min(mcp.env_rows.len().saturating_sub(1));
+                mcp.upsert_env_row(row, key_text.clone(), value);
+                let selected = mcp
+                    .env_rows
+                    .iter()
+                    .position(|entry| entry.key == key_text)
+                    .unwrap_or_else(|| mcp.env_rows.len().saturating_sub(1));
                 self.overlay = Overlay::McpEnvPicker { selected };
                 Some(Action::None)
             }

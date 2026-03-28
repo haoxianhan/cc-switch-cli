@@ -1842,6 +1842,7 @@ mod tests {
         app.form = Some(FormState::McpAdd(form));
         app.overlay = Overlay::McpEnvEntryEditor(McpEnvEntryEditorState {
             row: None,
+            return_selected: 0,
             field: McpEnvEditorField::Key,
             key: TextInput::new(""),
             value: TextInput::new(""),
@@ -1858,6 +1859,59 @@ mod tests {
         let action = app.on_key(key(KeyCode::Enter), &UiData::default());
         assert!(matches!(action, Action::None));
         assert!(matches!(app.overlay, Overlay::McpEnvEntryEditor(_)));
+    }
+
+    #[test]
+    fn mcp_env_picker_edit_reorder_keeps_selection_on_edited_row() {
+        let mut app = App::new(Some(AppType::Claude));
+        let mut form = McpAddFormState::new();
+        form.env_rows.push(McpEnvVarRow {
+            key: "A_KEY".to_string(),
+            value: "a".to_string(),
+        });
+        form.env_rows.push(McpEnvVarRow {
+            key: "Z_KEY".to_string(),
+            value: "z".to_string(),
+        });
+        app.form = Some(FormState::McpAdd(form));
+        app.overlay = Overlay::McpEnvPicker { selected: 1 };
+
+        app.on_key(key(KeyCode::Enter), &UiData::default());
+        if let Overlay::McpEnvEntryEditor(editor) = &mut app.overlay {
+            editor.key.set("0_KEY");
+        }
+        app.on_key(key(KeyCode::Enter), &UiData::default());
+
+        assert!(matches!(app.overlay, Overlay::McpEnvPicker { selected: 0 }));
+
+        app.on_key(key(KeyCode::Delete), &UiData::default());
+        let FormState::McpAdd(form) = app.form.expect("mcp form should remain open") else {
+            panic!("expected MCP form");
+        };
+        assert_eq!(form.env_rows.len(), 1);
+        assert_eq!(form.env_rows[0].key, "A_KEY");
+    }
+
+    #[test]
+    fn mcp_env_editor_esc_restores_previous_picker_selection() {
+        let mut app = App::new(Some(AppType::Claude));
+        let mut form = McpAddFormState::new();
+        form.env_rows.push(McpEnvVarRow {
+            key: "A_KEY".to_string(),
+            value: "a".to_string(),
+        });
+        form.env_rows.push(McpEnvVarRow {
+            key: "B_KEY".to_string(),
+            value: "b".to_string(),
+        });
+        app.form = Some(FormState::McpAdd(form));
+        app.overlay = Overlay::McpEnvPicker { selected: 1 };
+
+        app.on_key(key(KeyCode::Char('a')), &UiData::default());
+        assert!(matches!(app.overlay, Overlay::McpEnvEntryEditor(_)));
+
+        app.on_key(key(KeyCode::Esc), &UiData::default());
+        assert!(matches!(app.overlay, Overlay::McpEnvPicker { selected: 1 }));
     }
 
     #[test]

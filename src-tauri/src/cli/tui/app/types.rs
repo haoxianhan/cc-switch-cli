@@ -152,6 +152,7 @@ pub enum McpEnvEditorField {
 #[derive(Debug, Clone)]
 pub struct McpEnvEntryEditorState {
     pub row: Option<usize>,
+    pub return_selected: usize,
     pub field: McpEnvEditorField,
     pub key: crate::cli::tui::form::TextInput,
     pub value: crate::cli::tui::form::TextInput,

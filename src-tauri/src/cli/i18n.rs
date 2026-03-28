@@ -1574,7 +1574,7 @@ pub mod texts {
 
     pub fn tui_mcp_env_key_label() -> &'static str {
         if is_chinese() {
-            "Key"
+            "键"
         } else {
             "Key"
         }
@@ -1582,7 +1582,7 @@ pub mod texts {
 
     pub fn tui_mcp_env_value_label() -> &'static str {
         if is_chinese() {
-            "Value"
+            "值"
         } else {
             "Value"
         }
