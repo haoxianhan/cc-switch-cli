@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::app_config::AppType;
 use crate::cli::i18n::texts;
 use crate::config::write_json_file;
 use crate::error::AppError;
@@ -38,6 +39,10 @@ where
     Resolve: FnOnce() -> Result<PathBuf, AppError>,
     Handoff: FnOnce(&mut TuiTerminal, &PreparedClaudeLaunch) -> Result<(), AppError>,
 {
+    if !matches!(ctx.app.app_type, AppType::Claude) {
+        return Ok(());
+    }
+
     if let Err(err) = try_launch_with(ctx, &id, temp_dir, resolve_claude_binary, handoff) {
         ctx.app.push_toast(
             texts::tui_temp_launch_failed(&err.to_string()),
@@ -92,25 +97,18 @@ fn handoff_to_claude(
 ) -> Result<(), AppError> {
     use std::os::unix::process::CommandExt;
 
-    terminal.restore_best_effort()?;
+    terminal.with_terminal_restored_for_handoff(|| {
+        let exec_err = std::process::Command::new(&prepared.executable)
+            .arg("--settings")
+            .arg(&prepared.settings_path)
+            .exec();
 
-    let exec_err = std::process::Command::new(&prepared.executable)
-        .arg("--settings")
-        .arg(&prepared.settings_path)
-        .exec();
-
-    match terminal.activate_best_effort() {
-        Ok(()) => Err(AppError::localized(
+        Err(AppError::localized(
             "claude.temp_launch_exec_failed",
             format!("启动 Claude 失败: {exec_err}"),
             format!("Failed to launch Claude: {exec_err}"),
-        )),
-        Err(reactivate_err) => Err(AppError::localized(
-            "claude.temp_launch_exec_failed",
-            format!("启动 Claude 失败: {exec_err}；重新激活 TUI 失败: {reactivate_err}"),
-            format!("Failed to launch Claude: {exec_err}; also failed to reactivate the TUI: {reactivate_err}"),
-        )),
-    }
+        ))
+    })
 }
 
 #[cfg(not(unix))]
@@ -200,6 +198,7 @@ mod tests {
     use crate::cli::tui::runtime_systems::RequestTracker;
     use crate::provider::Provider;
     use serde_json::{json, Value};
+    use std::cell::Cell;
     use tempfile::TempDir;
 
     struct LaunchFixture {
@@ -212,10 +211,10 @@ mod tests {
     }
 
     impl LaunchFixture {
-        fn new(current_id: &str, rows: Vec<ProviderRow>) -> Self {
+        fn new(app_type: AppType, current_id: &str, rows: Vec<ProviderRow>) -> Self {
             Self {
                 terminal: TuiTerminal::new_for_test().expect("create test terminal"),
-                app: App::new(Some(AppType::Claude)),
+                app: App::new(Some(app_type)),
                 data: UiData {
                     providers: ProvidersSnapshot {
                         current_id: current_id.to_string(),
@@ -333,6 +332,7 @@ mod tests {
     fn launch_failure_does_not_switch_current_provider_and_surfaces_a_toast() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let mut fixture = LaunchFixture::new(
+            AppType::Claude,
             "current",
             vec![
                 provider_row(
@@ -369,6 +369,43 @@ mod tests {
             ),
             "expected temp launch failure toast, got {:?}",
             fixture.app.toast
+        );
+    }
+
+    #[test]
+    fn non_claude_runtime_launch_is_ignored_before_handoff() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let mut fixture = LaunchFixture::new(
+            AppType::Codex,
+            "current",
+            vec![provider_row(
+                "candidate",
+                json!({
+                    "ANTHROPIC_AUTH_TOKEN": "sk-candidate"
+                }),
+            )],
+        );
+        let handoff_called = Cell::new(false);
+
+        launch_with(
+            &mut fixture.ctx(),
+            "candidate".to_string(),
+            temp_dir.path(),
+            || Ok(PathBuf::from("/usr/bin/claude")),
+            |_, _| {
+                handoff_called.set(true);
+                Ok(())
+            },
+        )
+        .expect("non-Claude runtime dispatch should be ignored");
+
+        assert!(
+            !handoff_called.get(),
+            "non-Claude apps should not attempt the Claude temporary launch handoff"
+        );
+        assert!(
+            fixture.app.toast.is_none(),
+            "ignored non-Claude dispatch should stay silent"
         );
     }
 }

@@ -30,6 +30,10 @@ enum TerminalHandle {
 pub struct TuiTerminal {
     terminal: TerminalHandle,
     active: bool,
+    #[cfg(test)]
+    injected_restore_failure: Option<AppError>,
+    #[cfg(test)]
+    activation_count: usize,
 }
 
 pub struct PanicRestoreHookGuard {
@@ -129,6 +133,10 @@ impl TuiTerminal {
         Ok(Self {
             terminal: TerminalHandle::Stdout(terminal),
             active: true,
+            #[cfg(test)]
+            injected_restore_failure: None,
+            #[cfg(test)]
+            activation_count: 0,
         })
     }
 
@@ -143,6 +151,8 @@ impl TuiTerminal {
         Ok(Self {
             terminal: TerminalHandle::Test(terminal),
             active: false,
+            injected_restore_failure: None,
+            activation_count: 0,
         })
     }
 
@@ -202,9 +212,29 @@ impl TuiTerminal {
         result
     }
 
+    pub fn with_terminal_restored_for_handoff<T>(
+        &mut self,
+        f: impl FnOnce() -> Result<T, AppError>,
+    ) -> Result<T, AppError> {
+        if let Err(err) = self.restore_best_effort() {
+            self.active = false;
+            return recover_terminal_after_handoff_failure(self, err);
+        }
+
+        match f() {
+            Ok(value) => Ok(value),
+            Err(err) => recover_terminal_after_handoff_failure(self, err),
+        }
+    }
+
     pub fn restore_best_effort(&mut self) -> Result<(), AppError> {
         if !self.active {
             return Ok(());
+        }
+
+        #[cfg(test)]
+        if let Some(err) = self.injected_restore_failure.take() {
+            return Err(err);
         }
 
         #[cfg(test)]
@@ -254,6 +284,7 @@ impl TuiTerminal {
                 .clear()
                 .expect("test terminal backend should clear infallibly");
             self.active = true;
+            self.activation_count += 1;
             return Ok(());
         }
 
@@ -288,6 +319,35 @@ impl TuiTerminal {
             self.active = true;
             Ok(())
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_restore_failure_for_test(&mut self, err: AppError) {
+        self.injected_restore_failure = Some(err);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_active_for_test(&self) -> bool {
+        self.active
+    }
+
+    #[cfg(test)]
+    pub(crate) fn activation_count_for_test(&self) -> usize {
+        self.activation_count
+    }
+}
+
+fn recover_terminal_after_handoff_failure<T>(
+    terminal: &mut TuiTerminal,
+    err: AppError,
+) -> Result<T, AppError> {
+    match terminal.activate_best_effort() {
+        Ok(()) => Err(err),
+        Err(activate_err) => Err(AppError::localized(
+            "tui_terminal_restore_for_handoff_failed",
+            format!("恢复终端失败: {err}；重新激活 TUI 失败: {activate_err}"),
+            format!("Failed to restore terminal: {err}; also failed to reactivate the TUI: {activate_err}"),
+        )),
     }
 }
 
@@ -352,5 +412,43 @@ mod tests {
         terminal
             .restore_best_effort()
             .expect("test terminal should restore without a real tty");
+    }
+
+    #[test]
+    fn with_terminal_restored_for_handoff_reactivates_after_restore_failure() {
+        let mut terminal = TuiTerminal::new_for_test().expect("create test terminal");
+        terminal
+            .activate_best_effort()
+            .expect("activate test terminal first");
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                frame.render_widget(ratatui::widgets::Paragraph::new("stale"), area);
+            })
+            .expect("draw stale frame");
+        terminal.inject_restore_failure_for_test(crate::error::AppError::localized(
+            "test.restore_failure",
+            "模拟 restore 失败".to_string(),
+            "simulated restore failure".to_string(),
+        ));
+
+        let err = terminal
+            .with_terminal_restored_for_handoff(|| Ok::<_, crate::error::AppError>(()))
+            .expect_err("restore failure should be returned");
+
+        assert!(
+            err.to_string().contains("restore failure")
+                || err.to_string().contains("simulated restore failure"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            terminal.is_active_for_test(),
+            "pre-handoff restore failure should reactivate the TUI"
+        );
+        assert_eq!(
+            terminal.activation_count_for_test(),
+            2,
+            "handoff recovery should perform a second activation after the restore failure"
+        );
     }
 }

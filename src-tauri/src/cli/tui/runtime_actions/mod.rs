@@ -213,7 +213,13 @@ pub(crate) fn handle_action(
         Action::ProviderImportLiveConfig => providers::import_live_config(&mut ctx),
         Action::ProviderDelete { id } => providers::delete(&mut ctx, id),
         Action::ProviderSpeedtest { url } => providers::speedtest(&mut ctx, url),
-        Action::ProviderLaunchTemporary { id } => claude_temp_launch::launch(&mut ctx, id),
+        Action::ProviderLaunchTemporary { id } => {
+            if matches!(ctx.app.app_type, AppType::Claude) {
+                claude_temp_launch::launch(&mut ctx, id)
+            } else {
+                Ok(())
+            }
+        }
         Action::ProviderStreamCheck { id } => providers::stream_check(&mut ctx, id),
         Action::ProviderModelFetch {
             base_url,
