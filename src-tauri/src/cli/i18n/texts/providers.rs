@@ -174,6 +174,22 @@ pub fn tui_mcp_env_editor_hint() -> &'static str {
     }
 }
 
+pub fn tui_mcp_env_key_label() -> &'static str {
+    if is_chinese() {
+        "Key"
+    } else {
+        "Key"
+    }
+}
+
+pub fn tui_mcp_env_value_label() -> &'static str {
+    if is_chinese() {
+        "Value"
+    } else {
+        "Value"
+    }
+}
+
 pub fn tui_label_app_claude() -> &'static str {
     if is_chinese() {
         "应用: Claude"

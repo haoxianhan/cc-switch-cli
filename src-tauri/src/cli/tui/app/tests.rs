@@ -2,6 +2,7 @@ use super::*;
 
 #[cfg(test)]
 mod tests {
+    use super::types::{McpEnvEditorField, McpEnvEntryEditorState};
     use super::*;
     use crossterm::event::{KeyEvent, KeyModifiers};
     use serde_json::json;
@@ -12,6 +13,7 @@ mod tests {
 
     use crate::cli::i18n::{texts, use_test_language, Language};
     use crate::cli::tui::data::ProviderRow;
+    use crate::cli::tui::form::{McpEnvVarRow, TextInput};
     use crate::cli::tui::runtime_actions::handle_action;
     use crate::cli::tui::runtime_systems::RequestTracker;
     use crate::cli::tui::terminal::TuiTerminal;
@@ -1779,6 +1781,83 @@ mod tests {
         assert!(matches!(action, Action::None));
         assert!(app.editor.is_none());
         assert!(app.form.is_some());
+    }
+
+    #[test]
+    fn mcp_env_picker_enter_from_form() {
+        let mut app = App::new(Some(AppType::Claude));
+        let mut form = McpAddFormState::new();
+        form.focus = FormFocus::Fields;
+        form.field_idx = form
+            .fields()
+            .iter()
+            .position(|field| *field == McpAddField::Env)
+            .expect("Env field should exist");
+        app.form = Some(FormState::McpAdd(form));
+
+        let action = app.on_key(key(KeyCode::Enter), &UiData::default());
+
+        assert!(matches!(action, Action::None));
+        assert!(matches!(app.overlay, Overlay::McpEnvPicker { selected: 0 }));
+    }
+
+    #[test]
+    fn mcp_env_picker_add_edit_delete_flow() {
+        let mut app = App::new(Some(AppType::Claude));
+        let mut form = McpAddFormState::new();
+        form.focus = FormFocus::Fields;
+        form.env_rows.push(McpEnvVarRow {
+            key: "API_KEY".to_string(),
+            value: "old".to_string(),
+        });
+        app.form = Some(FormState::McpAdd(form));
+        app.overlay = Overlay::McpEnvPicker { selected: 0 };
+
+        app.on_key(key(KeyCode::Enter), &UiData::default());
+        app.on_key(key(KeyCode::Tab), &UiData::default());
+        app.on_key(key(KeyCode::Backspace), &UiData::default());
+        app.on_key(key(KeyCode::Char('n')), &UiData::default());
+        app.on_key(key(KeyCode::Char('e')), &UiData::default());
+        app.on_key(key(KeyCode::Char('w')), &UiData::default());
+        app.on_key(key(KeyCode::Enter), &UiData::default());
+        app.on_key(key(KeyCode::Delete), &UiData::default());
+
+        let FormState::McpAdd(form) = app.form.expect("mcp form should remain open") else {
+            panic!("expected MCP form");
+        };
+        assert!(
+            form.env_rows.is_empty(),
+            "Delete should remove the only env row"
+        );
+    }
+
+    #[test]
+    fn mcp_env_editor_rejects_blank_and_duplicate_keys() {
+        let mut app = App::new(Some(AppType::Claude));
+        let mut form = McpAddFormState::new();
+        form.env_rows.push(McpEnvVarRow {
+            key: "API_KEY".to_string(),
+            value: "secret".to_string(),
+        });
+        app.form = Some(FormState::McpAdd(form));
+        app.overlay = Overlay::McpEnvEntryEditor(McpEnvEntryEditorState {
+            row: None,
+            field: McpEnvEditorField::Key,
+            key: TextInput::new(""),
+            value: TextInput::new(""),
+        });
+
+        let action = app.on_key(key(KeyCode::Enter), &UiData::default());
+        assert!(matches!(action, Action::None));
+        assert!(matches!(app.overlay, Overlay::McpEnvEntryEditor(_)));
+
+        if let Overlay::McpEnvEntryEditor(editor) = &mut app.overlay {
+            editor.key.set("API_KEY");
+        }
+
+        let action = app.on_key(key(KeyCode::Enter), &UiData::default());
+        assert!(matches!(action, Action::None));
+        assert!(matches!(app.overlay, Overlay::McpEnvEntryEditor(_)));
     }
 
     #[test]

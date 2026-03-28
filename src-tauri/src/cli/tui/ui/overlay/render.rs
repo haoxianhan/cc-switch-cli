@@ -174,6 +174,19 @@ pub(crate) fn render_overlay(
                 *selected,
             )
         }
+        Overlay::McpEnvPicker { selected } => super::mcp_env::render_mcp_env_picker_overlay(
+            frame,
+            app,
+            content_area,
+            theme,
+            *selected,
+        ),
+        Overlay::McpEnvEntryEditor(_) => super::mcp_env::render_mcp_env_entry_editor_overlay(
+            frame,
+            content_area,
+            theme,
+            &app.overlay,
+        ),
         Overlay::Loading {
             kind,
             title,

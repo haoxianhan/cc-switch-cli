@@ -143,6 +143,30 @@ pub enum LoadingKind {
     UpdateCheck,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpEnvEditorField {
+    Key,
+    Value,
+}
+
+#[derive(Debug, Clone)]
+pub struct McpEnvEntryEditorState {
+    pub row: Option<usize>,
+    pub field: McpEnvEditorField,
+    pub key: crate::cli::tui::form::TextInput,
+    pub value: crate::cli::tui::form::TextInput,
+}
+
+impl McpEnvEntryEditorState {
+    pub fn key_active(&self) -> bool {
+        matches!(self.field, McpEnvEditorField::Key)
+    }
+
+    pub fn value_active(&self) -> bool {
+        matches!(self.field, McpEnvEditorField::Value)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Overlay {
     None,
@@ -216,6 +240,10 @@ pub enum Overlay {
     SkillsSyncMethodPicker {
         selected: usize,
     },
+    McpEnvPicker {
+        selected: usize,
+    },
+    McpEnvEntryEditor(McpEnvEntryEditorState),
     Loading {
         kind: LoadingKind,
         title: String,

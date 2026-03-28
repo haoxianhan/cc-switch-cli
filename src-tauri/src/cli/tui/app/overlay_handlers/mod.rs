@@ -1,6 +1,7 @@
 use super::*;
 
 mod dialogs;
+mod mcp_env;
 mod pickers;
 mod views;
 
@@ -15,6 +16,10 @@ impl App {
         }
 
         if let Some(action) = self.handle_view_overlay_key(key, data) {
+            return action;
+        }
+
+        if let Some(action) = self.handle_mcp_env_overlay_key(key) {
             return action;
         }
 

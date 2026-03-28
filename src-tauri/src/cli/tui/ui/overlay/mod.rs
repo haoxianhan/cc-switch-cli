@@ -1,5 +1,6 @@
 mod basic;
 mod layout;
+mod mcp_env;
 mod pickers;
 mod render;
 mod status;

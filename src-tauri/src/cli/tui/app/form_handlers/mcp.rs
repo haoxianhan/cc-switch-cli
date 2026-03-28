@@ -159,6 +159,10 @@ impl App {
                     return None;
                 };
                 match selected {
+                    McpAddField::Env => {
+                        let selected = 0;
+                        self.overlay = Overlay::McpEnvPicker { selected };
+                    }
                     McpAddField::AppClaude => mcp.apps.claude = !mcp.apps.claude,
                     McpAddField::AppCodex => mcp.apps.codex = !mcp.apps.codex,
                     McpAddField::AppGemini => mcp.apps.gemini = !mcp.apps.gemini,

@@ -55,6 +55,22 @@ pub fn tui_toast_command_empty() -> &'static str {
     }
 }
 
+pub fn tui_toast_mcp_env_key_empty() -> &'static str {
+    if is_chinese() {
+        "环境变量 Key 不能为空。"
+    } else {
+        "Env key cannot be empty."
+    }
+}
+
+pub fn tui_toast_mcp_env_duplicate_key(key: &str) -> String {
+    if is_chinese() {
+        format!("环境变量 Key '{}' 已存在。", key)
+    } else {
+        format!("Env key '{key}' already exists.")
+    }
+}
+
 pub fn tui_confirm_restore_backup_title() -> &'static str {
     if is_chinese() {
         "恢复备份"

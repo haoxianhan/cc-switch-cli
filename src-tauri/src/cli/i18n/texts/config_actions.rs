@@ -696,6 +696,38 @@ pub fn tui_mcp_apps_title(name: &str) -> String {
     }
 }
 
+pub fn tui_mcp_env_title() -> &'static str {
+    if is_chinese() {
+        "MCP 环境变量"
+    } else {
+        "MCP Env"
+    }
+}
+
+pub fn tui_mcp_env_add_entry_title() -> &'static str {
+    if is_chinese() {
+        "新增环境变量"
+    } else {
+        "Add Env Entry"
+    }
+}
+
+pub fn tui_mcp_env_edit_entry_title() -> &'static str {
+    if is_chinese() {
+        "编辑环境变量"
+    } else {
+        "Edit Env Entry"
+    }
+}
+
+pub fn tui_mcp_env_empty_state() -> &'static str {
+    if is_chinese() {
+        "暂无环境变量，按 a 新增。"
+    } else {
+        "No env entries yet. Press a to add one."
+    }
+}
+
 pub fn tui_skill_apps_title(name: &str) -> String {
     if is_chinese() {
         format!("选择 Skill 应用: {}", name)
