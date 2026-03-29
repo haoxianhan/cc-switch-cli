@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 
+mod claude_temp_launch;
 pub mod commands;
 pub mod editor;
 pub mod i18n;
@@ -56,6 +57,11 @@ pub enum Commands {
     /// Manage local multi-app proxy
     #[command(subcommand)]
     Proxy(commands::proxy::ProxyCommand),
+
+    /// Start an app with a provider selector without switching the global current provider
+    #[cfg(unix)]
+    #[command(subcommand)]
+    Start(commands::start::StartCommand),
 
     /// Manage environment variables and local CLI tool checks
     #[command(subcommand)]
@@ -168,6 +174,19 @@ mod tests {
         match cli.command {
             Some(Commands::Proxy(super::commands::proxy::ProxyCommand::Disable)) => {}
             _ => panic!("expected proxy disable command"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parses_start_claude_subcommand() {
+        let cli = Cli::parse_from(["cc-switch", "start", "claude", "demo"]);
+
+        match cli.command {
+            Some(Commands::Start(super::commands::start::StartCommand::Claude { selector })) => {
+                assert_eq!(selector, "demo");
+            }
+            _ => panic!("expected start claude command"),
         }
     }
 

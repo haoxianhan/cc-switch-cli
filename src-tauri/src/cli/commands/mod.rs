@@ -9,4 +9,5 @@ pub mod provider_input;
 mod provider_inspect;
 pub mod proxy;
 pub mod skills;
+pub mod start;
 pub mod update;

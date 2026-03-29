@@ -1,56 +1,46 @@
-use std::fs::{self, File, OpenOptions};
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::Path;
 
 use crate::app_config::AppType;
+use crate::cli::claude_temp_launch::{
+    ensure_temp_launch_supported, exec_prepared_claude, prepare_launch, PreparedClaudeLaunch,
+};
 use crate::cli::i18n::texts;
 use crate::error::AppError;
 use crate::provider::Provider;
-use serde_json::json;
 
 use super::super::app::ToastKind;
 use super::super::terminal::TuiTerminal;
 use super::RuntimeActionContext;
-
-#[derive(Debug)]
-struct PreparedClaudeLaunch {
-    executable: PathBuf,
-    settings_path: PathBuf,
-}
-
-impl PreparedClaudeLaunch {
-    fn cleanup_settings_file(&self) -> Result<(), AppError> {
-        cleanup_temp_settings_file(&self.settings_path)
-    }
-}
 
 pub(super) fn launch(ctx: &mut RuntimeActionContext<'_>, id: String) -> Result<(), AppError> {
     launch_with(
         ctx,
         id,
         &std::env::temp_dir(),
-        resolve_claude_binary,
+        ensure_temp_launch_supported,
+        prepare_launch,
         handoff_to_claude,
     )
 }
 
-fn launch_with<Resolve, Handoff>(
+fn launch_with<Support, Prepare, Handoff>(
     ctx: &mut RuntimeActionContext<'_>,
     id: String,
     temp_dir: &Path,
-    resolve_claude_binary: Resolve,
+    ensure_supported: Support,
+    prepare: Prepare,
     handoff: Handoff,
 ) -> Result<(), AppError>
 where
-    Resolve: FnOnce() -> Result<PathBuf, AppError>,
+    Support: FnOnce() -> Result<(), AppError>,
+    Prepare: FnOnce(&Provider, &Path) -> Result<PreparedClaudeLaunch, AppError>,
     Handoff: FnOnce(&mut TuiTerminal, &PreparedClaudeLaunch) -> Result<(), AppError>,
 {
     if !matches!(ctx.app.app_type, AppType::Claude) {
         return Ok(());
     }
 
-    if let Err(err) = try_launch_with(ctx, &id, temp_dir, resolve_claude_binary, handoff) {
+    if let Err(err) = try_launch_with(ctx, &id, temp_dir, ensure_supported, prepare, handoff) {
         ctx.app.push_toast(
             texts::tui_temp_launch_failed(&err.to_string()),
             ToastKind::Error,
@@ -59,114 +49,24 @@ where
     Ok(())
 }
 
-fn prepare_launch_with<Resolve>(
-    provider: &Provider,
-    temp_dir: &Path,
-    resolve_claude_binary: Resolve,
-) -> Result<PreparedClaudeLaunch, AppError>
-where
-    Resolve: FnOnce() -> Result<PathBuf, AppError>,
-{
-    let executable = resolve_claude_binary()?;
-    let env = provider
-        .settings_config
-        .get("env")
-        .and_then(|value| value.as_object())
-        .ok_or_else(|| {
-            AppError::localized(
-                "claude.temp_launch_missing_env",
-                format!("供应商 {} 缺少有效的 env 配置。", provider.id),
-                format!("Provider {} is missing a valid env object.", provider.id),
-            )
-        })?;
-    let settings_path = write_temp_settings_file(temp_dir, provider, &json!({ "env": env }))?;
-
-    Ok(PreparedClaudeLaunch {
-        executable,
-        settings_path,
-    })
-}
-
-fn resolve_claude_binary() -> Result<PathBuf, AppError> {
-    which::which("claude").map_err(|_| {
-        AppError::localized(
-            "claude.temp_launch_missing_binary",
-            "未找到 claude 命令，请先安装 Claude CLI。".to_string(),
-            "Could not find `claude` in PATH. Install Claude CLI first.".to_string(),
-        )
-    })
-}
-
-#[cfg(unix)]
 fn handoff_to_claude(
     terminal: &mut TuiTerminal,
     prepared: &PreparedClaudeLaunch,
 ) -> Result<(), AppError> {
-    use std::os::unix::process::CommandExt;
-
-    terminal.with_terminal_restored_for_handoff(|| {
-        let exec_err = build_handoff_command(prepared).exec();
-
-        Err(AppError::localized(
-            "claude.temp_launch_exec_failed",
-            format!("启动 Claude 失败: {exec_err}"),
-            format!("Failed to launch Claude: {exec_err}"),
-        ))
-    })
+    terminal.with_terminal_restored_for_handoff(|| exec_prepared_claude(prepared))
 }
 
-#[cfg(unix)]
-fn build_handoff_command(prepared: &PreparedClaudeLaunch) -> std::process::Command {
-    let mut command = std::process::Command::new(&prepared.executable);
-    command.arg("--settings").arg(&prepared.settings_path);
-    command
-}
-
-#[cfg(not(unix))]
-fn handoff_to_claude(
-    _terminal: &mut TuiTerminal,
-    _prepared: &PreparedClaudeLaunch,
-) -> Result<(), AppError> {
-    Err(AppError::localized(
-        "claude.temp_launch_unsupported_platform",
-        "当前平台暂不支持在当前终端临时启动 Claude。".to_string(),
-        "Temporary Claude launch in the current terminal is not supported on this platform."
-            .to_string(),
-    ))
-}
-
-fn try_launch_with<Resolve, Handoff>(
-    ctx: &mut RuntimeActionContext<'_>,
-    id: &str,
-    temp_dir: &Path,
-    resolve_claude_binary: Resolve,
-    handoff: Handoff,
-) -> Result<(), AppError>
-where
-    Resolve: FnOnce() -> Result<PathBuf, AppError>,
-    Handoff: FnOnce(&mut TuiTerminal, &PreparedClaudeLaunch) -> Result<(), AppError>,
-{
-    try_launch_with_platform_check(
-        ctx,
-        id,
-        temp_dir,
-        ensure_temp_launch_supported,
-        resolve_claude_binary,
-        handoff,
-    )
-}
-
-fn try_launch_with_platform_check<Support, Resolve, Handoff>(
+fn try_launch_with<Support, Prepare, Handoff>(
     ctx: &mut RuntimeActionContext<'_>,
     id: &str,
     temp_dir: &Path,
     ensure_supported: Support,
-    resolve_claude_binary: Resolve,
+    prepare: Prepare,
     handoff: Handoff,
 ) -> Result<(), AppError>
 where
     Support: FnOnce() -> Result<(), AppError>,
-    Resolve: FnOnce() -> Result<PathBuf, AppError>,
+    Prepare: FnOnce(&Provider, &Path) -> Result<PreparedClaudeLaunch, AppError>,
     Handoff: FnOnce(&mut TuiTerminal, &PreparedClaudeLaunch) -> Result<(), AppError>,
 {
     ensure_supported()?;
@@ -185,7 +85,7 @@ where
                 format!("Selected provider not found: {id}"),
             )
         })?;
-    let prepared = prepare_launch_with(&provider, temp_dir, resolve_claude_binary)?;
+    let prepared = prepare(&provider, temp_dir)?;
     let handoff_result = handoff(ctx.terminal, &prepared);
     let cleanup_result = prepared.cleanup_settings_file();
 
@@ -196,143 +96,10 @@ where
         (Err(err), Err(cleanup_err)) => Err(AppError::localized(
             "claude.temp_launch_cleanup_failed",
             format!("启动 Claude 失败: {err}；同时清理临时设置文件失败: {cleanup_err}"),
-            format!("Failed to launch Claude: {err}; also failed to remove the temporary settings file: {cleanup_err}"),
+            format!(
+                "Failed to launch Claude: {err}; also failed to remove the temporary settings file: {cleanup_err}"
+            ),
         )),
-    }
-}
-
-#[cfg(unix)]
-fn ensure_temp_launch_supported() -> Result<(), AppError> {
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn ensure_temp_launch_supported() -> Result<(), AppError> {
-    Err(AppError::localized(
-        "claude.temp_launch_unsupported_platform",
-        "当前平台暂不支持在当前终端临时启动 Claude。".to_string(),
-        "Temporary Claude launch in the current terminal is not supported on this platform."
-            .to_string(),
-    ))
-}
-
-fn write_temp_settings_file(
-    temp_dir: &Path,
-    provider: &Provider,
-    settings: &serde_json::Value,
-) -> Result<PathBuf, AppError> {
-    write_temp_settings_file_with(temp_dir, provider, settings, finalize_temp_settings_file)
-}
-
-fn write_temp_settings_file_with<Finalize>(
-    temp_dir: &Path,
-    provider: &Provider,
-    settings: &serde_json::Value,
-    finalize: Finalize,
-) -> Result<PathBuf, AppError>
-where
-    Finalize: FnOnce(&Path) -> Result<(), AppError>,
-{
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let filename = format!(
-        "cc-switch-claude-{}-{}-{timestamp}.json",
-        sanitize_filename_fragment(&provider.id),
-        std::process::id()
-    );
-    let path = temp_dir.join(filename);
-    let content =
-        serde_json::to_vec_pretty(settings).map_err(|source| AppError::JsonSerialize { source })?;
-
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|err| AppError::io(parent, err))?;
-    }
-
-    let write_result = (|| {
-        let mut file = create_secret_temp_file(&path)?;
-        file.write_all(&content)
-            .and_then(|()| file.flush())
-            .map_err(|err| AppError::io(&path, err))?;
-        finalize(&path)?;
-        Ok(())
-    })();
-
-    match write_result {
-        Ok(()) => Ok(path),
-        Err(err) => {
-            let cleanup_result = cleanup_temp_settings_file(&path);
-            match cleanup_result {
-                Ok(()) => Err(err),
-                Err(cleanup_err) => Err(AppError::localized(
-                    "claude.temp_launch_tempfile_cleanup_failed",
-                    format!(
-                        "写入临时设置文件失败: {err}；同时清理失败: {cleanup_err}"
-                    ),
-                    format!(
-                        "Failed to write the temporary settings file: {err}; also failed to clean it up: {cleanup_err}"
-                    ),
-                )),
-            }
-        }
-    }
-}
-
-#[cfg(unix)]
-fn finalize_temp_settings_file(path: &Path) -> Result<(), AppError> {
-    use std::os::unix::fs::PermissionsExt;
-
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .map_err(|err| AppError::io(path, err))
-}
-
-#[cfg(not(unix))]
-fn finalize_temp_settings_file(_path: &Path) -> Result<(), AppError> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn create_secret_temp_file(path: &Path) -> Result<File, AppError> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
-        .map_err(|err| AppError::io(path, err))
-}
-
-#[cfg(not(unix))]
-fn create_secret_temp_file(path: &Path) -> Result<File, AppError> {
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|err| AppError::io(path, err))
-}
-
-fn cleanup_temp_settings_file(path: &Path) -> Result<(), AppError> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(AppError::io(path, err)),
-    }
-}
-
-fn sanitize_filename_fragment(value: &str) -> String {
-    let sanitized: String = value
-        .chars()
-        .map(|ch| match ch {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' => ch,
-            _ => '-',
-        })
-        .collect();
-    if sanitized.is_empty() {
-        "provider".to_string()
-    } else {
-        sanitized
     }
 }
 
@@ -340,14 +107,14 @@ fn sanitize_filename_fragment(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::app_config::AppType;
+    use crate::cli::claude_temp_launch::prepare_launch_with;
     use crate::cli::tui::app::{App, ToastKind};
     use crate::cli::tui::data::{ProviderRow, ProvidersSnapshot, UiData};
     use crate::cli::tui::runtime_systems::RequestTracker;
     use crate::provider::Provider;
     use serde_json::{json, Value};
     use std::cell::Cell;
-    #[cfg(unix)]
-    use std::ffi::OsString;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     struct LaunchFixture {
@@ -416,147 +183,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn unix_handoff_command_execs_claude_directly() {
-        let prepared = PreparedClaudeLaunch {
-            executable: PathBuf::from("/usr/local/bin/claude"),
-            settings_path: PathBuf::from("/tmp/cc-switch-claude-settings.json"),
-        };
-
-        let command = build_handoff_command(&prepared);
-        let args: Vec<OsString> = command.get_args().map(|arg| arg.to_os_string()).collect();
-
-        assert_eq!(
-            command.get_program(),
-            std::path::Path::new("/usr/local/bin/claude")
-        );
-        assert_eq!(
-            args,
-            vec![
-                OsString::from("--settings"),
-                OsString::from("/tmp/cc-switch-claude-settings.json"),
-            ]
-        );
-    }
-
-    #[test]
-    fn temp_settings_file_is_removed_when_finalize_step_fails() {
-        let temp_dir = TempDir::new().expect("create temp dir");
-        let provider = Provider::with_id(
-            "demo".to_string(),
-            "Demo".to_string(),
-            json!({
-                "env": {
-                    "ANTHROPIC_AUTH_TOKEN": "sk-demo"
-                }
-            }),
-            None,
-        );
-
-        let err = write_temp_settings_file_with(
-            temp_dir.path(),
-            &provider,
-            &json!({
-                "env": {
-                    "ANTHROPIC_AUTH_TOKEN": "sk-demo"
-                }
-            }),
-            |_| Err(AppError::Message("simulated finalize failure".to_string())),
-        )
-        .expect_err("finalize failure should bubble up");
-
-        assert!(
-            err.to_string().contains("simulated finalize failure"),
-            "unexpected error: {err}"
-        );
-
-        let leftover_files: Vec<_> = std::fs::read_dir(temp_dir.path())
-            .expect("read temp dir")
-            .map(|entry| entry.expect("dir entry").path())
-            .collect();
-        assert!(
-            leftover_files.is_empty(),
-            "temporary settings file should be removed on failure, found: {leftover_files:?}"
-        );
-    }
-
-    #[test]
-    fn prepare_launch_writes_claude_env_settings_file() {
-        let temp_dir = TempDir::new().expect("create temp dir");
-        let provider = Provider::with_id(
-            "demo".to_string(),
-            "Demo".to_string(),
-            json!({
-                "env": {
-                    "ANTHROPIC_AUTH_TOKEN": "sk-demo",
-                    "ANTHROPIC_BASE_URL": "https://api.example.com"
-                }
-            }),
-            None,
-        );
-
-        let prepared = prepare_launch_with(&provider, temp_dir.path(), || {
-            Ok(PathBuf::from("/usr/bin/claude"))
-        })
-        .expect("prepare launch");
-
-        assert_eq!(prepared.executable, PathBuf::from("/usr/bin/claude"));
-        let written: Value = serde_json::from_str(
-            &std::fs::read_to_string(&prepared.settings_path).expect("read temp settings"),
-        )
-        .expect("parse temp settings");
-        assert_eq!(
-            written,
-            json!({
-                "env": {
-                    "ANTHROPIC_AUTH_TOKEN": "sk-demo",
-                    "ANTHROPIC_BASE_URL": "https://api.example.com"
-                }
-            })
-        );
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-
-            let mode = std::fs::metadata(&prepared.settings_path)
-                .expect("stat temp settings")
-                .permissions()
-                .mode()
-                & 0o777;
-            assert_eq!(
-                mode, 0o600,
-                "temp settings file should use owner-only permissions"
-            );
-        }
-    }
-
-    #[test]
-    fn missing_claude_binary_reports_an_error() {
-        let temp_dir = TempDir::new().expect("create temp dir");
-        let provider = Provider::with_id(
-            "demo".to_string(),
-            "Demo".to_string(),
-            json!({
-                "env": {
-                    "ANTHROPIC_AUTH_TOKEN": "sk-demo"
-                }
-            }),
-            None,
-        );
-
-        let err = prepare_launch_with(&provider, temp_dir.path(), || {
-            Err(AppError::Message("claude binary is missing".to_string()))
-        })
-        .expect_err("missing binary should fail");
-
-        assert!(
-            err.to_string().contains("claude"),
-            "error should mention claude: {err}"
-        );
-    }
-
     #[test]
     fn launch_failure_does_not_switch_current_provider_and_surfaces_a_toast() {
         let temp_dir = TempDir::new().expect("create temp dir");
@@ -584,7 +210,10 @@ mod tests {
             &mut fixture.ctx(),
             "candidate".to_string(),
             temp_dir.path(),
-            || Ok(PathBuf::from("/usr/bin/claude")),
+            ensure_temp_launch_supported,
+            |provider, temp_dir| {
+                prepare_launch_with(provider, temp_dir, || Ok(PathBuf::from("/usr/bin/claude")))
+            },
             |_, prepared| {
                 captured_settings_path.replace(Some(prepared.settings_path.clone()));
                 Err(AppError::Message("launch exploded".to_string()))
@@ -631,7 +260,10 @@ mod tests {
             &mut fixture.ctx(),
             "candidate".to_string(),
             temp_dir.path(),
-            || Ok(PathBuf::from("/usr/bin/claude")),
+            ensure_temp_launch_supported,
+            |provider, temp_dir| {
+                prepare_launch_with(provider, temp_dir, || Ok(PathBuf::from("/usr/bin/claude")))
+            },
             |_, _| {
                 handoff_called.set(true);
                 Ok(())
@@ -662,9 +294,9 @@ mod tests {
                 }),
             )],
         );
-        let resolve_called = Cell::new(false);
+        let prepare_called = Cell::new(false);
 
-        let err = try_launch_with_platform_check(
+        let err = try_launch_with(
             &mut fixture.ctx(),
             "candidate",
             temp_dir.path(),
@@ -676,9 +308,9 @@ mod tests {
                         .to_string(),
                 ))
             },
-            || {
-                resolve_called.set(true);
-                Ok(PathBuf::from("/usr/bin/claude"))
+            |provider, temp_dir| {
+                prepare_called.set(true);
+                prepare_launch_with(provider, temp_dir, || Ok(PathBuf::from("/usr/bin/claude")))
             },
             |_, _| Ok(()),
         )
@@ -689,7 +321,7 @@ mod tests {
             "unexpected error: {err}"
         );
         assert!(
-            !resolve_called.get(),
+            !prepare_called.get(),
             "unsupported platforms should fail before resolving the Claude binary"
         );
         assert!(
