@@ -31,7 +31,7 @@ pub(super) fn render_mcp_env_picker_overlay(
             ("↑↓", texts::tui_key_select()),
             ("a", texts::tui_key_add()),
             ("Enter", texts::tui_key_edit()),
-            ("Del", texts::tui_key_delete()),
+            ("Del/Backspace", texts::tui_key_delete()),
             ("Esc", texts::tui_key_close()),
         ],
     );

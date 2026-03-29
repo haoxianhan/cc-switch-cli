@@ -7,7 +7,7 @@ const MCP_TEMPLATES: [&str; 2] = ["Custom", "Filesystem (npx)"];
 
 impl McpAddFormState {
     pub fn new() -> Self {
-        Self {
+        let mut form = Self {
             mode: FormMode::Add,
             focus: FormFocus::Templates,
             template_idx: 0,
@@ -21,7 +21,10 @@ impl McpAddFormState {
             env_rows: Vec::new(),
             apps: Default::default(),
             json_scroll: 0,
-        }
+            initial_snapshot: Value::Null,
+        };
+        form.capture_initial_snapshot();
+        form
     }
 
     pub fn from_server(server: &McpServer) -> Self {
@@ -51,8 +54,21 @@ impl McpAddFormState {
             form.args.set(joined);
         }
         form.env_rows = load_env_rows(server);
+        form.capture_initial_snapshot();
 
         form
+    }
+
+    fn capture_initial_snapshot(&mut self) {
+        self.initial_snapshot = self.to_mcp_server_json_value();
+    }
+
+    pub fn rebase_initial_snapshot(&mut self) {
+        self.capture_initial_snapshot();
+    }
+
+    pub fn has_unsaved_changes(&self) -> bool {
+        self.to_mcp_server_json_value() != self.initial_snapshot
     }
 
     pub fn upsert_env_row(&mut self, row: Option<usize>, key: String, value: String) {

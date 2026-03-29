@@ -70,6 +70,7 @@ pub enum ConfirmAction {
     ProviderApiFormatProxyNotice,
     ProviderSwitchSharedConfigNotice,
     OpenClawDailyMemoryDelete { filename: String },
+    FormSaveBeforeClose,
     EditorDiscard,
     EditorSaveBeforeClose,
     WebDavMigrateV1ToV2,

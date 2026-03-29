@@ -323,6 +323,7 @@ pub struct ProviderAddFormState {
     pub opencode_model_context_limit: TextInput,
     pub opencode_model_output_limit: TextInput,
     opencode_model_original_id: Option<String>,
+    initial_snapshot: Value,
 }
 
 #[derive(Debug, Clone)]
@@ -340,10 +341,20 @@ pub struct McpAddFormState {
     pub env_rows: Vec<McpEnvVarRow>,
     pub apps: McpApps,
     pub json_scroll: usize,
+    initial_snapshot: Value,
 }
 
 #[derive(Debug, Clone)]
 pub enum FormState {
     ProviderAdd(ProviderAddFormState),
     McpAdd(McpAddFormState),
+}
+
+impl FormState {
+    pub fn has_unsaved_changes(&self) -> bool {
+        match self {
+            FormState::ProviderAdd(form) => form.has_unsaved_changes(),
+            FormState::McpAdd(form) => form.has_unsaved_changes(),
+        }
+    }
 }

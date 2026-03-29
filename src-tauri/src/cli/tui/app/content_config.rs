@@ -1070,6 +1070,7 @@ impl App {
         self.editor = None;
         let mut state = McpAddFormState::new();
         state.apps.set_enabled_for(&self.app_type, true);
+        state.rebase_initial_snapshot();
         self.form = Some(FormState::McpAdd(state));
     }
 
