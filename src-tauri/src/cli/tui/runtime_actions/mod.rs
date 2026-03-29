@@ -13,6 +13,7 @@ use super::runtime_systems::{
 use super::terminal::TuiTerminal;
 
 mod claude_temp_launch;
+mod codex_temp_launch;
 mod config;
 mod editor;
 mod helpers;
@@ -214,8 +215,8 @@ pub(crate) fn handle_action(
         Action::ProviderDelete { id } => providers::delete(&mut ctx, id),
         Action::ProviderSpeedtest { url } => providers::speedtest(&mut ctx, url),
         Action::ProviderLaunchTemporary { id } => {
-            if matches!(ctx.app.app_type, AppType::Claude) {
-                claude_temp_launch::launch(&mut ctx, id)
+            if matches!(ctx.app.app_type, AppType::Codex) {
+                codex_temp_launch::launch(&mut ctx, id)
             } else {
                 Ok(())
             }

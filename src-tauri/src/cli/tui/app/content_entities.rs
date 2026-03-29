@@ -117,7 +117,7 @@ impl App {
                 let Some(row) = visible.get(self.provider_idx) else {
                     return Action::None;
                 };
-                if !matches!(self.app_type, AppType::Claude) {
+                if !matches!(self.app_type, AppType::Claude | AppType::Codex) {
                     return Action::None;
                 }
                 Action::ProviderLaunchTemporary { id: row.id.clone() }
@@ -208,7 +208,7 @@ impl App {
                 Action::ProviderSpeedtest { url }
             }
             KeyCode::Char('o') => {
-                if !matches!(self.app_type, AppType::Claude) {
+                if !matches!(self.app_type, AppType::Claude | AppType::Codex) {
                     return Action::None;
                 }
                 Action::ProviderLaunchTemporary { id: row.id.clone() }
@@ -431,8 +431,42 @@ mod tests {
     }
 
     #[test]
-    fn non_claude_provider_o_key_is_noop() {
+    fn codex_provider_o_key_requests_temporary_launch() {
         let mut app = App::new(Some(AppType::Codex));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let mut data = UiData::default();
+        data.providers.rows.push(provider_row("p1"));
+
+        let action = app.on_key(key(KeyCode::Char('o')), &data);
+        assert!(matches!(
+            action,
+            Action::ProviderLaunchTemporary { id } if id == "p1"
+        ));
+    }
+
+    #[test]
+    fn codex_provider_detail_o_key_requests_temporary_launch() {
+        let mut app = App::new(Some(AppType::Codex));
+        app.route = Route::ProviderDetail {
+            id: "p1".to_string(),
+        };
+        app.focus = Focus::Content;
+
+        let mut data = UiData::default();
+        data.providers.rows.push(provider_row("p1"));
+
+        let action = app.on_key(key(KeyCode::Char('o')), &data);
+        assert!(matches!(
+            action,
+            Action::ProviderLaunchTemporary { id } if id == "p1"
+        ));
+    }
+
+    #[test]
+    fn non_claude_provider_o_key_is_noop() {
+        let mut app = App::new(Some(AppType::Gemini));
         app.route = Route::Providers;
         app.focus = Focus::Content;
 
@@ -445,7 +479,7 @@ mod tests {
 
     #[test]
     fn non_claude_provider_detail_o_key_is_noop() {
-        let mut app = App::new(Some(AppType::Codex));
+        let mut app = App::new(Some(AppType::Gemini));
         app.route = Route::ProviderDetail {
             id: "p1".to_string(),
         };
