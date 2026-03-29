@@ -10,7 +10,7 @@ impl App {
             return Some(action);
         }
 
-        if let Some(action) = self.handle_confirm_overlay_key(key) {
+        if let Some(action) = self.handle_confirm_overlay_key(key, data) {
             return Some(action);
         }
 
@@ -59,7 +59,7 @@ impl App {
         })
     }
 
-    fn handle_confirm_overlay_key(&mut self, key: KeyEvent) -> Option<Action> {
+    fn handle_confirm_overlay_key(&mut self, key: KeyEvent, data: &UiData) -> Option<Action> {
         let Overlay::Confirm(confirm) = &self.overlay else {
             return None;
         };
@@ -101,6 +101,7 @@ impl App {
                             filename: filename.clone(),
                         }
                     }
+                    ConfirmAction::FormSaveBeforeClose => self.handle_form_save_shortcut(data),
                     ConfirmAction::EditorDiscard => Action::EditorDiscard,
                     ConfirmAction::EditorSaveBeforeClose => {
                         if let Some(editor) = self.editor.as_ref() {
@@ -120,6 +121,9 @@ impl App {
             KeyCode::Char('n') | KeyCode::Char('N') => {
                 if matches!(confirm.action, ConfirmAction::EditorSaveBeforeClose) {
                     self.editor = None;
+                }
+                if matches!(confirm.action, ConfirmAction::FormSaveBeforeClose) {
+                    self.form = None;
                 }
                 self.close_overlay();
                 Action::None

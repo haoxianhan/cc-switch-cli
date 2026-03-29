@@ -1832,6 +1832,36 @@ mod tests {
     }
 
     #[test]
+    fn mcp_env_picker_backspace_deletes_selected_row() {
+        let mut app = App::new(Some(AppType::Claude));
+        let mut form = McpAddFormState::new();
+        form.focus = FormFocus::Fields;
+        form.env_rows.push(McpEnvVarRow {
+            key: "FIRST".to_string(),
+            value: "one".to_string(),
+        });
+        form.env_rows.push(McpEnvVarRow {
+            key: "SECOND".to_string(),
+            value: "two".to_string(),
+        });
+        app.form = Some(FormState::McpAdd(form));
+        app.overlay = Overlay::McpEnvPicker { selected: 1 };
+
+        app.on_key(key(KeyCode::Backspace), &UiData::default());
+
+        assert!(matches!(app.overlay, Overlay::McpEnvPicker { selected: 0 }));
+        let FormState::McpAdd(form) = app.form.expect("mcp form should remain open") else {
+            panic!("expected MCP form");
+        };
+        assert_eq!(
+            form.env_rows.len(),
+            1,
+            "Backspace should delete selected env row"
+        );
+        assert_eq!(form.env_rows[0].key, "FIRST");
+    }
+
+    #[test]
     fn mcp_env_picker_add_save_keeps_selection_on_new_key() {
         let mut app = App::new(Some(AppType::Claude));
         let mut form = McpAddFormState::new();
@@ -7983,6 +8013,438 @@ mod tests {
             other => panic!("expected ProviderAdd form, got: {other:?}"),
         };
         assert_eq!(focus, super::super::form::FormFocus::Fields);
+    }
+
+    #[test]
+    fn provider_form_esc_dirty_opens_save_before_close_confirm() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let data = UiData::default();
+        app.on_key(key(KeyCode::Char('a')), &data);
+
+        if let Some(super::super::form::FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.name.set("Provider One");
+        } else {
+            panic!("expected ProviderAdd form");
+        }
+
+        let action = app.on_key(key(KeyCode::Esc), &data);
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            app.overlay,
+            Overlay::Confirm(ConfirmOverlay {
+                title,
+                message,
+                action: ConfirmAction::FormSaveBeforeClose,
+                ..
+            }) if title == texts::tui_editor_save_before_close_title()
+                && message == texts::tui_editor_save_before_close_message()
+        ));
+        assert!(matches!(app.form, Some(FormState::ProviderAdd(_))));
+    }
+
+    #[test]
+    fn provider_form_q_dirty_opens_save_before_close_confirm() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let data = UiData::default();
+        app.on_key(key(KeyCode::Char('a')), &data);
+
+        if let Some(super::super::form::FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.name.set("Provider One");
+        } else {
+            panic!("expected ProviderAdd form");
+        }
+
+        let action = app.on_key(key(KeyCode::Char('q')), &data);
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            app.overlay,
+            Overlay::Confirm(ConfirmOverlay {
+                title,
+                message,
+                action: ConfirmAction::FormSaveBeforeClose,
+                ..
+            }) if title == texts::tui_editor_save_before_close_title()
+                && message == texts::tui_editor_save_before_close_message()
+        ));
+        assert!(matches!(app.form, Some(FormState::ProviderAdd(_))));
+    }
+
+    #[test]
+    fn provider_edit_form_esc_dirty_opens_save_before_close_confirm() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let mut data = UiData::default();
+        data.providers.rows.push(super::super::data::ProviderRow {
+            id: "p1".to_string(),
+            provider: crate::provider::Provider::with_id(
+                "p1".to_string(),
+                "Provider One".to_string(),
+                json!({"env":{"ANTHROPIC_BASE_URL":"https://example.com"}}),
+                None,
+            ),
+            api_url: Some("https://example.com".to_string()),
+            is_current: false,
+            is_in_config: true,
+            is_saved: true,
+            is_default_model: false,
+            primary_model_id: None,
+            default_model_id: None,
+        });
+
+        app.on_key(key(KeyCode::Char('e')), &data);
+        if let Some(super::super::form::FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.name.set("Provider Renamed");
+        } else {
+            panic!("expected ProviderAdd form in edit mode");
+        }
+
+        let action = app.on_key(key(KeyCode::Esc), &data);
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            app.overlay,
+            Overlay::Confirm(ConfirmOverlay {
+                title,
+                message,
+                action: ConfirmAction::FormSaveBeforeClose,
+                ..
+            }) if title == texts::tui_editor_save_before_close_title()
+                && message == texts::tui_editor_save_before_close_message()
+        ));
+        assert!(matches!(app.form, Some(FormState::ProviderAdd(_))));
+    }
+
+    #[test]
+    fn provider_edit_form_save_confirm_enter_submits_provider_edit_action() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let mut data = UiData::default();
+        data.providers.rows.push(super::super::data::ProviderRow {
+            id: "p1".to_string(),
+            provider: crate::provider::Provider::with_id(
+                "p1".to_string(),
+                "Provider One".to_string(),
+                json!({"env":{"ANTHROPIC_BASE_URL":"https://example.com"}}),
+                None,
+            ),
+            api_url: Some("https://example.com".to_string()),
+            is_current: false,
+            is_in_config: true,
+            is_saved: true,
+            is_default_model: false,
+            primary_model_id: None,
+            default_model_id: None,
+        });
+
+        app.on_key(key(KeyCode::Char('e')), &data);
+        if let Some(super::super::form::FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.name.set("Provider Renamed");
+        } else {
+            panic!("expected ProviderAdd form in edit mode");
+        }
+
+        app.on_key(key(KeyCode::Esc), &data);
+        let action = app.on_key(key(KeyCode::Enter), &data);
+        assert!(matches!(
+            action,
+            Action::EditorSubmit {
+                submit: EditorSubmit::ProviderEdit { id },
+                content
+            } if id == "p1" && content.contains("\"name\": \"Provider Renamed\"")
+        ));
+        assert!(matches!(app.form, Some(FormState::ProviderAdd(_))));
+        assert!(matches!(app.overlay, Overlay::None));
+    }
+
+    #[test]
+    fn provider_form_esc_clean_closes_without_confirm() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let data = UiData::default();
+        app.on_key(key(KeyCode::Char('a')), &data);
+
+        let action = app.on_key(key(KeyCode::Esc), &data);
+        assert!(matches!(action, Action::None));
+        assert!(matches!(app.overlay, Overlay::None));
+        assert!(app.form.is_none(), "Esc should close clean provider form");
+    }
+
+    #[test]
+    fn mcp_form_esc_dirty_opens_save_before_close_confirm() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Mcp;
+        app.focus = Focus::Content;
+
+        let data = UiData::default();
+        app.on_key(key(KeyCode::Char('a')), &data);
+
+        if let Some(super::super::form::FormState::McpAdd(form)) = app.form.as_mut() {
+            form.id.set("m1");
+        } else {
+            panic!("expected McpAdd form");
+        }
+
+        let action = app.on_key(key(KeyCode::Esc), &data);
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            app.overlay,
+            Overlay::Confirm(ConfirmOverlay {
+                title,
+                message,
+                action: ConfirmAction::FormSaveBeforeClose,
+                ..
+            }) if title == texts::tui_editor_save_before_close_title()
+                && message == texts::tui_editor_save_before_close_message()
+        ));
+        assert!(matches!(app.form, Some(FormState::McpAdd(_))));
+    }
+
+    #[test]
+    fn mcp_edit_form_esc_dirty_opens_save_before_close_confirm() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Mcp;
+        app.focus = Focus::Content;
+
+        let mut data = UiData::default();
+        data.mcp.rows.push(super::super::data::McpRow {
+            id: "m1".to_string(),
+            server: crate::app_config::McpServer {
+                id: "m1".to_string(),
+                name: "Server".to_string(),
+                server: json!({"command":"foo","args":[]}),
+                apps: crate::app_config::McpApps::default(),
+                description: None,
+                homepage: None,
+                docs: None,
+                tags: vec![],
+            },
+        });
+
+        app.on_key(key(KeyCode::Char('e')), &data);
+        if let Some(super::super::form::FormState::McpAdd(form)) = app.form.as_mut() {
+            form.name.set("Server Renamed");
+        } else {
+            panic!("expected McpAdd form in edit mode");
+        }
+
+        let action = app.on_key(key(KeyCode::Esc), &data);
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            app.overlay,
+            Overlay::Confirm(ConfirmOverlay {
+                title,
+                message,
+                action: ConfirmAction::FormSaveBeforeClose,
+                ..
+            }) if title == texts::tui_editor_save_before_close_title()
+                && message == texts::tui_editor_save_before_close_message()
+        ));
+        assert!(matches!(app.form, Some(FormState::McpAdd(_))));
+    }
+
+    #[test]
+    fn mcp_edit_form_save_confirm_enter_submits_mcp_edit_action() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Mcp;
+        app.focus = Focus::Content;
+
+        let mut data = UiData::default();
+        data.mcp.rows.push(super::super::data::McpRow {
+            id: "m1".to_string(),
+            server: crate::app_config::McpServer {
+                id: "m1".to_string(),
+                name: "Server".to_string(),
+                server: json!({"command":"foo","args":[]}),
+                apps: crate::app_config::McpApps::default(),
+                description: None,
+                homepage: None,
+                docs: None,
+                tags: vec![],
+            },
+        });
+
+        app.on_key(key(KeyCode::Char('e')), &data);
+        if let Some(super::super::form::FormState::McpAdd(form)) = app.form.as_mut() {
+            form.name.set("Server Renamed");
+        } else {
+            panic!("expected McpAdd form in edit mode");
+        }
+
+        app.on_key(key(KeyCode::Esc), &data);
+        let action = app.on_key(key(KeyCode::Enter), &data);
+        assert!(matches!(
+            action,
+            Action::EditorSubmit {
+                submit: EditorSubmit::McpEdit { id },
+                content
+            } if id == "m1" && content.contains("\"name\": \"Server Renamed\"")
+        ));
+        assert!(matches!(app.form, Some(FormState::McpAdd(_))));
+        assert!(matches!(app.overlay, Overlay::None));
+    }
+
+    #[test]
+    fn mcp_form_esc_clean_closes_without_confirm() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Mcp;
+        app.focus = Focus::Content;
+
+        let data = UiData::default();
+        app.on_key(key(KeyCode::Char('a')), &data);
+
+        let action = app.on_key(key(KeyCode::Esc), &data);
+        assert!(matches!(action, Action::None));
+        assert!(matches!(app.overlay, Overlay::None));
+        assert!(app.form.is_none(), "Esc should close clean MCP form");
+    }
+
+    #[test]
+    fn provider_form_save_confirm_enter_submits_form_save_action() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let data = UiData::default();
+        app.on_key(key(KeyCode::Char('a')), &data);
+
+        if let Some(super::super::form::FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.name.set("Provider One");
+        } else {
+            panic!("expected ProviderAdd form");
+        }
+
+        app.on_key(key(KeyCode::Esc), &data);
+        let action = app.on_key(key(KeyCode::Enter), &data);
+        assert!(matches!(
+            action,
+            Action::EditorSubmit {
+                submit: EditorSubmit::ProviderAdd,
+                content
+            } if content.contains("\"name\": \"Provider One\"")
+        ));
+        assert!(matches!(app.form, Some(FormState::ProviderAdd(_))));
+        assert!(matches!(app.overlay, Overlay::None));
+    }
+
+    #[test]
+    fn provider_form_save_confirm_n_discards_and_closes() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let data = UiData::default();
+        app.on_key(key(KeyCode::Char('a')), &data);
+
+        if let Some(super::super::form::FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.name.set("Provider One");
+        } else {
+            panic!("expected ProviderAdd form");
+        }
+
+        app.on_key(key(KeyCode::Esc), &data);
+        let action = app.on_key(key(KeyCode::Char('n')), &data);
+        assert!(matches!(action, Action::None));
+        assert!(app.form.is_none(), "confirm N should close without saving");
+        assert!(matches!(app.overlay, Overlay::None));
+    }
+
+    #[test]
+    fn provider_form_save_confirm_esc_cancels_and_preserves_edits() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let data = UiData::default();
+        app.on_key(key(KeyCode::Char('a')), &data);
+
+        if let Some(super::super::form::FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.name.set("Provider One");
+        } else {
+            panic!("expected ProviderAdd form");
+        }
+
+        app.on_key(key(KeyCode::Esc), &data);
+        let action = app.on_key(key(KeyCode::Esc), &data);
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            app.form.as_ref(),
+            Some(FormState::ProviderAdd(form)) if form.name.value == "Provider One"
+        ));
+        assert!(matches!(app.overlay, Overlay::None));
+
+        let second_exit = app.on_key(key(KeyCode::Esc), &data);
+        assert!(matches!(second_exit, Action::None));
+        assert!(matches!(
+            app.overlay,
+            Overlay::Confirm(ConfirmOverlay {
+                action: ConfirmAction::FormSaveBeforeClose,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn mcp_form_save_confirm_enter_submits_form_save_action() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Mcp;
+        app.focus = Focus::Content;
+
+        let data = UiData::default();
+        app.on_key(key(KeyCode::Char('a')), &data);
+
+        if let Some(super::super::form::FormState::McpAdd(form)) = app.form.as_mut() {
+            form.id.set("m1");
+            form.name.set("MCP One");
+            form.command.set("node");
+        } else {
+            panic!("expected McpAdd form");
+        }
+
+        app.on_key(key(KeyCode::Esc), &data);
+        let action = app.on_key(key(KeyCode::Enter), &data);
+        assert!(matches!(
+            action,
+            Action::EditorSubmit {
+                submit: EditorSubmit::McpAdd,
+                content
+            } if content.contains("\"id\": \"m1\"")
+                && content.contains("\"name\": \"MCP One\"")
+        ));
+        assert!(matches!(app.form, Some(FormState::McpAdd(_))));
+        assert!(matches!(app.overlay, Overlay::None));
+    }
+
+    #[test]
+    fn mcp_form_save_confirm_n_discards_and_closes() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Mcp;
+        app.focus = Focus::Content;
+
+        let data = UiData::default();
+        app.on_key(key(KeyCode::Char('a')), &data);
+
+        if let Some(super::super::form::FormState::McpAdd(form)) = app.form.as_mut() {
+            form.id.set("m1");
+        } else {
+            panic!("expected McpAdd form");
+        }
+
+        app.on_key(key(KeyCode::Esc), &data);
+        let action = app.on_key(key(KeyCode::Char('n')), &data);
+        assert!(matches!(action, Action::None));
+        assert!(app.form.is_none(), "confirm N should close MCP form");
+        assert!(matches!(app.overlay, Overlay::None));
     }
 
     #[test]

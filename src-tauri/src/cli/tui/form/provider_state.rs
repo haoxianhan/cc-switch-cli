@@ -30,7 +30,7 @@ impl ProviderAddFormState {
             _ => ("", "", CodexWireApi::Responses, true),
         };
 
-        Self {
+        let mut form = Self {
             app_type,
             mode: FormMode::Add,
             focus: FormFocus::Templates,
@@ -77,7 +77,10 @@ impl ProviderAddFormState {
             opencode_model_context_limit: TextInput::new(""),
             opencode_model_output_limit: TextInput::new(""),
             opencode_model_original_id: None,
-        }
+            initial_snapshot: Value::Null,
+        };
+        form.capture_initial_snapshot();
+        form
     }
 
     pub fn from_provider(app_type: AppType, provider: &Provider) -> Self {
@@ -108,8 +111,17 @@ impl ProviderAddFormState {
         }
 
         populate_form_from_provider(&mut form, &app_type, provider);
+        form.capture_initial_snapshot();
 
         form
+    }
+
+    fn capture_initial_snapshot(&mut self) {
+        self.initial_snapshot = self.to_provider_json_value();
+    }
+
+    pub fn has_unsaved_changes(&self) -> bool {
+        self.to_provider_json_value() != self.initial_snapshot
     }
 
     pub fn is_id_editable(&self) -> bool {
@@ -367,6 +379,7 @@ impl ProviderAddFormState {
         let previous_codex_config_scroll = self.codex_config_scroll;
         let previous_include_common_config = self.include_common_config;
         let previous_extra = self.extra.clone();
+        let previous_initial_snapshot = self.initial_snapshot.clone();
 
         let mut next = Self::from_provider(self.app_type.clone(), provider);
         let overlay = serde_json::to_value(provider).unwrap_or_else(|_| json!({}));
@@ -402,6 +415,7 @@ impl ProviderAddFormState {
             next.id.set(id);
             next.id_is_manual = true;
         }
+        next.initial_snapshot = previous_initial_snapshot;
 
         *self = next;
     }
@@ -419,6 +433,7 @@ impl ProviderAddFormState {
         let previous_codex_auth_scroll = self.codex_auth_scroll;
         let previous_codex_config_scroll = self.codex_config_scroll;
         let previous_include_common_config = self.include_common_config;
+        let previous_initial_snapshot = self.initial_snapshot.clone();
 
         let current_value = self.to_provider_json_value();
         if let (Some(current_obj), Some(edited_obj)) =
@@ -466,6 +481,7 @@ impl ProviderAddFormState {
             next.id.set(id);
             next.id_is_manual = true;
         }
+        next.initial_snapshot = previous_initial_snapshot;
 
         *self = next;
         Ok(())

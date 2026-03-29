@@ -154,7 +154,10 @@ pub(super) fn render_confirm_overlay(
         .split(inner);
     let body_area = inset_top(chunks[1], 1);
 
-    if matches!(confirm.action, ConfirmAction::EditorSaveBeforeClose) {
+    if matches!(
+        confirm.action,
+        ConfirmAction::EditorSaveBeforeClose | ConfirmAction::FormSaveBeforeClose
+    ) {
         render_key_bar_center(
             frame,
             chunks[0],

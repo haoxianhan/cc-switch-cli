@@ -2433,6 +2433,50 @@ fn editor_unsaved_changes_confirm_overlay_shows_three_actions_and_is_compact() {
 }
 
 #[test]
+fn form_save_before_close_confirm_overlay_shows_save_exit_and_cancel_actions() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+
+    let prev = std::env::var("NO_COLOR").ok();
+    std::env::set_var("NO_COLOR", "1");
+    let _restore_no_color = EnvGuard {
+        key: "NO_COLOR",
+        prev,
+    };
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Providers;
+    app.focus = Focus::Content;
+    app.overlay = Overlay::Confirm(ConfirmOverlay {
+        title: texts::tui_editor_save_before_close_title().to_string(),
+        message: texts::tui_editor_save_before_close_message().to_string(),
+        action: ConfirmAction::FormSaveBeforeClose,
+    });
+    let data = minimal_data(&app.app_type);
+
+    let buf = render(&app, &data);
+    let theme = theme_for(&app.app_type);
+    let content = super::content_pane_rect(buf.area, &theme);
+    let area = super::centered_rect_fixed(
+        super::OVERLAY_FIXED_MD.0,
+        super::OVERLAY_FIXED_MD.1,
+        content,
+    );
+
+    let key_bar_row = (area.y..area.y.saturating_add(area.height))
+        .map(|y| line_at(&buf, y))
+        .find(|line| line.contains("Enter") && line.contains("Esc"))
+        .expect("confirm overlay should render a key-bar row");
+    let enter_hint = format!("Enter={}", texts::tui_key_save_and_exit());
+    let n_hint = format!("N={}", texts::tui_key_exit_without_save());
+    let esc_hint = format!("Esc={}", texts::tui_key_cancel());
+
+    assert!(key_bar_row.contains(&enter_hint), "{key_bar_row}");
+    assert!(key_bar_row.contains(&n_hint), "{key_bar_row}");
+    assert!(key_bar_row.contains(&esc_hint), "{key_bar_row}");
+}
+
+#[test]
 fn claude_api_format_picker_overlay_is_compact_and_padded() {
     let _lock = lock_env();
     let _no_color = EnvGuard::remove("NO_COLOR");

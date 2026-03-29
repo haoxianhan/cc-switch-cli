@@ -31,15 +31,30 @@ impl App {
         }
 
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
-                self.form = None;
-                Action::None
-            }
+            KeyCode::Esc | KeyCode::Char('q') => self.handle_form_exit_key(),
             _ => Action::None,
         }
     }
 
-    fn handle_form_save_shortcut(&mut self, data: &UiData) -> Action {
+    fn handle_form_exit_key(&mut self) -> Action {
+        let has_unsaved_changes = self
+            .form
+            .as_ref()
+            .is_some_and(FormState::has_unsaved_changes);
+        if has_unsaved_changes {
+            self.overlay = Overlay::Confirm(ConfirmOverlay {
+                title: texts::tui_editor_save_before_close_title().to_string(),
+                message: texts::tui_editor_save_before_close_message().to_string(),
+                action: ConfirmAction::FormSaveBeforeClose,
+            });
+            return Action::None;
+        }
+
+        self.form = None;
+        Action::None
+    }
+
+    pub(super) fn handle_form_save_shortcut(&mut self, data: &UiData) -> Action {
         match self.form.as_ref() {
             Some(FormState::ProviderAdd(_)) => self.build_provider_form_save_action(data),
             Some(FormState::McpAdd(_)) => self.build_mcp_form_save_action(),

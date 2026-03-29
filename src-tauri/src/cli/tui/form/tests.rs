@@ -916,6 +916,56 @@ fn mcp_add_form_switching_back_to_custom_clears_template_values() {
 }
 
 #[test]
+fn form_state_has_unsaved_changes_is_clean_on_open() {
+    let provider_form = FormState::ProviderAdd(ProviderAddFormState::new(AppType::Claude));
+    assert!(!provider_form.has_unsaved_changes());
+
+    let mcp_form = FormState::McpAdd(McpAddFormState::new());
+    assert!(!mcp_form.has_unsaved_changes());
+}
+
+#[test]
+fn provider_add_form_has_unsaved_changes_after_edit() {
+    let mut form = ProviderAddFormState::new(AppType::Claude);
+    assert!(!form.has_unsaved_changes());
+
+    form.name.set("Provider One");
+    assert!(form.has_unsaved_changes());
+}
+
+#[test]
+fn mcp_add_form_has_unsaved_changes_after_env_edit() {
+    let mut form = McpAddFormState::new();
+    assert!(!form.has_unsaved_changes());
+
+    form.upsert_env_row(None, "API_KEY".to_string(), "secret".to_string());
+    assert!(form.has_unsaved_changes());
+}
+
+#[test]
+fn provider_add_form_has_unsaved_changes_roundtrip_edit_returns_clean() {
+    let provider = Provider::with_id(
+        "p1".to_string(),
+        "Provider One".to_string(),
+        json!({
+            "env": {
+                "ANTHROPIC_AUTH_TOKEN": "token"
+            }
+        }),
+        None,
+    );
+    let mut form = ProviderAddFormState::from_provider(AppType::Claude, &provider);
+    assert!(!form.has_unsaved_changes());
+
+    let original_name = form.name.value.clone();
+    form.name.set("Provider Two");
+    assert!(form.has_unsaved_changes());
+
+    form.name.set(original_name);
+    assert!(!form.has_unsaved_changes());
+}
+
+#[test]
 fn provider_add_form_common_config_json_merges_into_preview_but_not_raw_submit_payload() {
     let mut form = ProviderAddFormState::new(AppType::Claude);
     form.id.set("p1");

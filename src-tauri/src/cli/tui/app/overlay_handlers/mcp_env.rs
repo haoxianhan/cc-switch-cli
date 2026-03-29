@@ -60,7 +60,7 @@ impl App {
                 });
                 Action::None
             }
-            KeyCode::Delete => {
+            KeyCode::Backspace | KeyCode::Delete => {
                 mcp.remove_env_row(*selected);
                 *selected = (*selected).min(mcp.env_rows.len().saturating_sub(1));
                 Action::None
