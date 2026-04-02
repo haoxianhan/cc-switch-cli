@@ -13,7 +13,7 @@
 
 Unified management for Claude Code, Codex, Gemini, OpenCode, and OpenClaw provider configurations, plus app-specific support for MCP servers, skills, prompts, local proxy routes, and environment checks.
 
-[English](README.md) | [Chinese](README_ZH.md)
+English | [中文](README_ZH.md)
 
 </div>
 
@@ -64,8 +64,7 @@ This project is a **CLI fork** of [CC-Switch](https://github.com/farion1231/cc-s
       </a>
     </td>
     <td>
-      Thanks to AICodeMirror for sponsoring this project! AICodeMirror provides official high-stability relay services for Claude Code / Codex / Gemini CLI, with enterprise-grade concurrency, fast invoicing, and 24/7 dedicated technical support. Claude Code / Codex / Gemini official channels at 38% / 2% / 9% of original price, with extra discounts on top-ups! AICodeMirror offers special benefits for cc-switch-cli users: register via <a href="https://www.aicodemirror.com/register?invitecode=77V9EA">this link</a> to enjoy 20% off your first top-up, and enterprise customers can get up to 25% off!<br/>
-      Website: <a href="https://www.aicodemirror.com">https://www.aicodemirror.com</a>
+      Thanks to <b>AICodeMirror</b> for sponsoring this project! <b>AICodeMirror</b> provides official high-stability relay services for Claude Code / Codex / Gemini CLI, with enterprise-grade concurrency, fast invoicing, and 24/7 dedicated technical support. Claude Code / Codex / Gemini official channels at <b>38% / 2% / 9%</b> of original price, with extra discounts on top-ups! <b>AICodeMirror</b> offers special benefits for cc-switch-cli users: register via <a href="https://www.aicodemirror.com/register?invitecode=77V9EA">this link</a> to enjoy <b>20% off</b> your first top-up, and enterprise customers can get up to <b>25% off</b>!
     </td>
   </tr>
   <tr>
