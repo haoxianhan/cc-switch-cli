@@ -11,7 +11,7 @@ pub(crate) fn render_overlay(
 
     match &app.overlay {
         Overlay::None => {}
-        Overlay::Help => super::basic::render_help_overlay(frame, content_area, theme),
+        Overlay::Help(help) => super::basic::render_help_overlay(frame, content_area, theme, help),
         Overlay::Confirm(confirm) => {
             super::basic::render_confirm_overlay(frame, content_area, theme, confirm)
         }
@@ -38,14 +38,25 @@ pub(crate) fn render_overlay(
                 *selected,
             )
         }
-        Overlay::CommonSnippetView { view, .. } => {
-            super::basic::render_common_snippet_view_overlay(
+        Overlay::ProviderTestMenu {
+            provider_id,
+            selected,
+        } => super::pickers::render_provider_test_menu_overlay(
+            frame,
+            app,
+            data,
+            content_area,
+            theme,
+            provider_id,
+            *selected,
+        ),
+        Overlay::FailoverQueueManager { selected } => {
+            super::pickers::render_failover_queue_manager_overlay(
                 frame,
+                data,
                 content_area,
                 theme,
-                &view.title,
-                &view.lines,
-                view.scroll,
+                *selected,
             )
         }
         Overlay::ClaudeModelPicker { selected, editing } => {
@@ -65,6 +76,57 @@ pub(crate) fn render_overlay(
                 content_area,
                 theme,
                 *selected,
+            )
+        }
+        Overlay::UserAgentPicker { selected } => super::pickers::render_user_agent_picker_overlay(
+            frame,
+            app,
+            content_area,
+            theme,
+            *selected,
+        ),
+        Overlay::UsageQueryTemplatePicker { selected } => {
+            super::pickers::render_usage_query_template_picker_overlay(
+                frame,
+                app,
+                content_area,
+                theme,
+                *selected,
+            )
+        }
+        Overlay::ManagedAccountPicker {
+            selected,
+            binding,
+            selected_account_id,
+            ..
+        } => super::pickers::render_managed_account_picker_overlay(
+            frame,
+            app,
+            content_area,
+            theme,
+            *selected,
+            *binding,
+            selected_account_id.as_deref(),
+        ),
+        Overlay::ManagedAccountActionPicker {
+            account_id,
+            selected,
+            ..
+        } => super::pickers::render_managed_account_action_picker_overlay(
+            frame,
+            app,
+            content_area,
+            theme,
+            account_id,
+            *selected,
+        ),
+        Overlay::HermesModelsPicker { editing } => {
+            super::pickers::render_hermes_models_picker_overlay(
+                frame,
+                app,
+                content_area,
+                theme,
+                *editing,
             )
         }
         Overlay::ModelFetchPicker {
